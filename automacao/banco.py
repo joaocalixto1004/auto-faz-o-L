@@ -40,6 +40,7 @@ CONFIG_PADRAO = {
     "anti_bloqueio": "nao",        # "sim" liga o modo anti-bloqueio (bem mais lento e cauteloso)
     "boost": "nao",                # "sim" ignora os tetos por hora/dia e o limite diário (mais risco)
     "tetos": "",                   # tetos por ação em JSON (protecao.validar_tetos); vazio: as sugestões
+    "tetos_zerados_em": "",        # momento (ISO) do "zerar contagem": tetos e limite diário contam só depois dele
     "seguir": "nao",               # "sim": ao visitar um perfil da lista, segue se ainda não segue
     "ver_stories": "nao",          # "sim": assiste e curte os stories ainda não vistos do perfil
     "repetir": "nao",              # "sim": ao terminar a lista, recomeça sozinho depois de um intervalo
@@ -325,13 +326,31 @@ def acoes_concluidas(conn: sqlite3.Connection, rede: str, codigo: str,
     return {linha[0] for linha in linhas}
 
 
+def contagem_zerada_em(conn: sqlite3.Connection) -> str:
+    """Momento (ISO) em que a contagem dos tetos foi zerada; "" se nunca foi."""
+    linha = conn.execute("SELECT valor FROM configuracoes WHERE chave = 'tetos_zerados_em'").fetchone()
+    return (linha[0] if linha else "") or ""
+
+
+def zerar_contagem_dos_tetos(conn: sqlite3.Connection) -> str:
+    """Faz os tetos por hora/dia e o limite diário recomeçarem a contar de agora.
+
+    O histórico continua inteiro: é ele que impede repetir uma ação numa
+    publicação. Devolve o momento gravado.
+    """
+    momento = agora()
+    salvar_configuracoes(conn, {"tetos_zerados_em": momento})
+    return momento
+
+
 def publicacoes_trabalhadas_hoje(conn: sqlite3.Connection, rede: str,
                                 conta: str | None = None) -> int:
     """Quantas publicações da rede tiveram alguma ação feita pelo script hoje.
 
-    Com `conta`, conta só as da conta (o limite diário é por conta).
+    Com `conta`, conta só as da conta (o limite diário é por conta). Depois de
+    zerar a contagem, só o que veio depois conta.
     """
-    filtro_conta, parametros = "", [rede]
+    filtro_conta, parametros = "", [rede, contagem_zerada_em(conn)]
     if conta:
         filtro_conta = "AND a.conta = ?"
         parametros.append(conta.lower())
@@ -339,7 +358,7 @@ def publicacoes_trabalhadas_hoje(conn: sqlite3.Connection, rede: str,
         f"""
         SELECT count(DISTINCT a.publicacao_id)
         FROM acoes a JOIN publicacoes p ON p.id = a.publicacao_id
-        WHERE p.rede = ? AND a.status IN ('feito', 'nao_confirmado') {filtro_conta}
+        WHERE p.rede = ? AND a.registrado_em >= ? AND a.status IN ('feito', 'nao_confirmado') {filtro_conta}
           AND p.aba NOT IN ('perfil', 'stories')
           AND substr(a.registrado_em, 1, 10) = date('now', 'localtime')
         """,
@@ -547,9 +566,10 @@ def acoes_recentes(conn: sqlite3.Connection, rede: str, conta: str | None, desde
     """[(acao, momento)] das ações que clicaram desde `desde` (ISO), uma por publicação e ação.
 
     A marca "nao_confirmado" gravada antes do clique e o "feito" depois dele
-    contam como uma ação só (vale o primeiro momento).
+    contam como uma ação só (vale o primeiro momento). Nada antes do momento
+    em que a contagem foi zerada entra.
     """
-    filtro_conta, parametros = "", [rede, desde]
+    filtro_conta, parametros = "", [rede, max(desde, contagem_zerada_em(conn))]
     if conta:
         filtro_conta = "AND a.conta = ?"
         parametros.append(conta.lower())
@@ -566,8 +586,8 @@ def acoes_recentes(conn: sqlite3.Connection, rede: str, conta: str | None, desde
 
 
 def publicacoes_do_alvo_hoje(conn: sqlite3.Connection, rede: str, perfil_alvo: str, conta: str | None) -> int:
-    """Publicações do perfil-alvo em que a conta já agiu hoje."""
-    filtro_conta, parametros = "", [rede, perfil_alvo]
+    """Publicações do perfil-alvo em que a conta já agiu hoje (depois do último "zerar contagem")."""
+    filtro_conta, parametros = "", [rede, perfil_alvo, contagem_zerada_em(conn)]
     if conta:
         filtro_conta = "AND a.conta = ?"
         parametros.append(conta.lower())
@@ -575,7 +595,7 @@ def publicacoes_do_alvo_hoje(conn: sqlite3.Connection, rede: str, perfil_alvo: s
         f"""
         SELECT count(DISTINCT a.publicacao_id)
         FROM acoes a JOIN publicacoes p ON p.id = a.publicacao_id
-        WHERE p.rede = ? AND lower(coalesce(a.alvo, p.perfil)) = lower(?)
+        WHERE p.rede = ? AND lower(coalesce(a.alvo, p.perfil)) = lower(?) AND a.registrado_em >= ?
           AND a.status IN ('feito', 'nao_confirmado') {filtro_conta}
           AND p.aba NOT IN ('perfil', 'stories')
           AND substr(a.registrado_em, 1, 10) = date('now', 'localtime')

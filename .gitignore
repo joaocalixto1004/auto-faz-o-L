@@ -14,3 +14,7 @@ perfis/
 capturas/
 traces/
 logs/
+
+# Trava de arquivo aberto no LibreOffice/Excel
+.~lock.*#
+~$*

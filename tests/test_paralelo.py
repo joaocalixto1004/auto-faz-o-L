@@ -458,3 +458,30 @@ def test_configuracao_grava_vazio_quando_sao_as_sugestoes():
     assert erros == [] and json.loads(valores["tetos"])["por_hora"]["curtir"] == 20
     _, erros = configuracao.validar(dict(base, tetos=json.dumps({"por_hora": {"curtir": 0}})))
     assert any("curtir" in erro for erro in erros)
+
+
+# ------------------------------------------------------- zerar a contagem dos tetos
+
+def test_zerar_contagem_libera_os_tetos_sem_esquecer_o_que_foi_feito(conn):
+    from datetime import datetime, timedelta
+    from automacao import banco
+    from automacao.redes.protecao import PularAcao
+    agora = datetime.now().astimezone()
+    for i in range(15):                            # 15 reposts agora há pouco: tetos da hora e do dia
+        pub = banco.registrar_publicacao(conn, "Instagram", f"R{i}", "alvo", "posts", 1, "u")
+        conn.execute("INSERT INTO acoes (publicacao_id, acao, status, registrado_em, conta) "
+                     "VALUES (?, 'repostar', 'feito', ?, '@ana')",
+                     (pub, (agora - timedelta(seconds=i + 2)).isoformat(timespec="seconds")))
+    conn.commit()
+    esperas = []
+    with pytest.raises(PularAcao):
+        controlar_ritmo(conn, PROTECAO_NORMAL, "Instagram", "@ana", "repostar", dormir=esperas.append)
+    assert banco.publicacoes_trabalhadas_hoje(conn, "Instagram", "@ana") == 15
+    assert banco.publicacoes_do_alvo_hoje(conn, "Instagram", "alvo", "@ana") == 15
+
+    banco.zerar_contagem_dos_tetos(conn)
+    controlar_ritmo(conn, PROTECAO_NORMAL, "Instagram", "@ana", "repostar", dormir=esperas.append)
+    assert esperas == []                           # liberado na hora
+    assert banco.publicacoes_trabalhadas_hoje(conn, "Instagram", "@ana") == 0
+    assert banco.publicacoes_do_alvo_hoje(conn, "Instagram", "alvo", "@ana") == 0
+    assert banco.acoes_concluidas(conn, "Instagram", "R0", "@ana") == {"repostar"}   # nunca repete
