@@ -13,6 +13,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
@@ -552,21 +553,33 @@ def _curtir_story(conn, pg: Page, rodada_id: int | None, cfg: Config, perfil: st
         return 0
     if not mesmo_story():
         return 0
-    publicacao_id = banco.registrar_publicacao(conn, REDE, codigo, perfil, "stories", 0, url)
-    banco.registrar_acao(conn, publicacao_id, rodada_id, "curtir", "nao_confirmado",
-                         "clique enviado, aguardando confirmação", conta=conta, alvo=perfil)
+    marcado: dict[str, int] = {}
+
     def ainda_nao_curtido() -> None:
         if not mesmo_story():
             raise RuntimeError("o story mudou antes do clique; não cliquei")
         if pg.locator(SVG_DESCURTIR).count():
             raise RuntimeError("o story já está curtido; não cliquei")
+        # Tudo conferido, com o mouse parado no coração: a marca vai para o banco
+        # agora, logo antes do clique (como em comum.processar_publicacao).
+        marcado["id"] = banco.registrar_publicacao(conn, REDE, codigo, perfil, "stories", 0, url)
+        banco.registrar_acao(conn, marcado["id"], rodada_id, "curtir", "nao_confirmado",
+                             "clique enviado, aguardando confirmação", conta=conta, alvo=perfil)
 
     try:
         clicar(pg, coracao, conferir_antes=ainda_nao_curtido)
     except RuntimeError:
-        return 0
+        return 0  # não clicou nem marcou: o story pode ser curtido numa próxima visita
+    except PlaywrightError as erro:
+        if "id" not in marcado:
+            return 0
+        # O clique pode ter saído ou não: a marca fica (nunca repete) e, se o
+        # coração já aparece curtido no mesmo story, conta como feito.
+        if not (mesmo_story() and pg.locator(SVG_DESCURTIR).count()):
+            print(f"    {'story':<13} curtida não confirmada ({erro.message.splitlines()[0]})")
+            return 0
     if esperar_ate(lambda: pg.locator(SVG_DESCURTIR).count() > 0, 6):
-        banco.registrar_acao(conn, publicacao_id, rodada_id, "curtir", "feito", "story", conta=conta, alvo=perfil)
+        banco.registrar_acao(conn, marcado["id"], rodada_id, "curtir", "feito", "story", conta=conta, alvo=perfil)
         return 1
     return 0
 

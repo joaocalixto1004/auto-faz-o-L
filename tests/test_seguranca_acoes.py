@@ -915,8 +915,37 @@ def test_story_muda_durante_o_movimento_nao_clica(conn, relogio, mudanca):
         pg.ao_mover = lambda: setattr(pg, "curtido", True)
     assert curtir_story(conn, pg) == 0
     assert pg.cliques == []
-    # A marca gravada antes fica: este story nunca recebe outro clique.
-    assert banco.acoes_concluidas(conn, "Instagram", CODIGO_STORY, CONTA) == {"curtir"}
+    # Nenhum clique saiu, então nada é marcado (a marca só vai para o banco
+    # depois da última conferência, logo antes do clique).
+    assert acoes_no_banco(conn) == []
+
+
+def falha_no_clique():
+    raise PlaywrightTimeout("Locator.click: Timeout 10000ms exceeded.")
+
+
+def test_story_clique_que_falha_fica_marcado_e_nao_derruba_os_stories(conn, relogio, capsys):
+    pg = PaginaStories(relogio)
+    pg.no_clique.append(falha_no_clique)          # o clique não chega a acontecer
+    assert curtir_story(conn, pg) == 0
+    assert pg.cliques == [] and pg.curtido is False
+    # Não dá para ter certeza de que o clique não saiu: a marca fica e o story nunca é repetido.
+    assert acoes_no_banco(conn) == [("curtir", "nao_confirmado", "clique enviado, aguardando confirmação")]
+    assert "curtida não confirmada" in capsys.readouterr().out
+    pg.no_clique.clear()
+    assert curtir_story(conn, pg) == 0 and pg.cliques == []
+
+
+def test_story_clique_demorado_que_curtiu_conta_como_feito(conn, relogio):
+    pg = PaginaStories(relogio)
+
+    def curte_e_estoura_o_tempo():
+        pg.curtido = True                          # o clique saiu, mas a espera estourou
+        raise PlaywrightTimeout("Locator.click: Timeout 10000ms exceeded.")
+
+    pg.no_clique.append(curte_e_estoura_o_tempo)
+    assert curtir_story(conn, pg) == 1
+    assert [status for _, status, _ in acoes_no_banco(conn)] == ["nao_confirmado", "feito"]
 
 
 def test_story_sem_confirmacao_fica_marcado_e_nunca_e_repetido(conn, relogio):
