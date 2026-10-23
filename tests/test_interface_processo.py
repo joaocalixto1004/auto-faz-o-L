@@ -322,3 +322,80 @@ def test_saida_segurada_por_neto_nao_trava_o_fim(tmp_path):
 def test_argumentos_automacao_modo_teste_de_comentarios():
     assert ip.argumentos_automacao(verificar_comentarios=True) == ["--verificar-comentarios"]
     assert ip.argumentos_automacao(True, True, True) == ["--simular", "--trace", "--verificar-comentarios"]
+
+
+# ------------------------------------------------------------ restos depois do fim
+
+@so_linux
+def test_restos_sao_encerrados_quando_o_script_cai(tmp_path, monkeypatch):
+    """Script que cai (código 1) deixando um filho vivo (como o driver ou o Chrome):
+    o filho é encerrado antes do "fim", sem ninguém ter pedido para parar."""
+    monkeypatch.setattr(ip, "ESPERA_RESTOS", 0.5)
+    falso = script(tmp_path, """
+        import signal, subprocess, sys
+        filho = subprocess.Popen([sys.executable, "-c",
+            "import signal, time; signal.signal(signal.SIGINT, signal.SIG_IGN); "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])
+        print(filho.pid, flush=True)
+        raise SystemExit(1)
+    """)
+    processo = Processo(ip.montar_comando(falso), cwd=tmp_path)
+    processo.iniciar()
+    linhas, codigo = coletar(processo)
+    pid_filho = int(linhas[0])
+    try:
+        assert codigo == 1 and not processo.parada_pedida
+        assert processo.esperar_limpeza(0)  # o "fim" só chega depois da limpeza
+        assert esperar_morrer(pid_filho, timeout=2)
+    finally:
+        if vivo(pid_filho):
+            os.kill(pid_filho, 9)
+
+
+@so_linux
+def test_script_que_termina_sem_deixar_ninguem_nao_mata_nada(tmp_path, monkeypatch):
+    sinais = []
+    killpg = os.killpg
+    monkeypatch.setattr(os, "killpg", lambda grupo, sinal: (sinais.append(sinal), killpg(grupo, sinal)))
+    processo = Processo(ip.montar_comando(script(tmp_path, "print('ok')\n")), cwd=tmp_path)
+    processo.iniciar()
+    assert coletar(processo) == (["ok"], 0)
+    assert set(sinais) <= {0}  # só a conferência "ainda tem alguém?", nenhum sinal de verdade
+
+
+class ProcFalso:
+    pid = 4242
+    returncode = 0
+
+
+@pytest.mark.parametrize(("filhos", "mortos"), [([], []), ([111, 222], [111, 222])])
+def test_restos_no_windows_matam_a_arvore_de_cada_filho(monkeypatch, tmp_path, filhos, mortos):
+    """No Windows, o taskkill /T no script que já saiu não acha ninguém: vai em cada filho."""
+    monkeypatch.setattr(ip, "NO_WINDOWS", True)
+    monkeypatch.setattr(ip, "ESPERA_RESTOS", 0.2)
+    perguntas, matou = [], []
+    monkeypatch.setattr(ip, "_filhos_windows", lambda pid: perguntas.append(pid) or list(filhos))
+    monkeypatch.setattr(ip, "_matar_arvore_windows", matou.append)
+    monkeypatch.setattr(os, "killpg", lambda *a: pytest.fail("no Windows não há grupo de processos"))
+    processo = Processo(["python"], cwd=tmp_path)
+    processo._proc = ProcFalso()
+    processo._limpar_restos()
+    assert matou == mortos and set(perguntas) == {4242}
+
+
+def test_filhos_windows_fora_do_windows_nao_acha_ninguem():
+    if sys.platform == "win32":
+        pytest.skip("no Windows a função consulta o sistema de verdade")
+    assert ip._filhos_windows(os.getpid()) == []
+
+
+def test_trava_de_uma_janela_por_vez(tmp_path):
+    assert ip.TRAVA_INTERFACE == tmp_path / "interface.trava"  # o conftest aponta para o temporário
+    primeira = ip.travar_interface()
+    try:
+        assert primeira is not None and ip.travar_interface() is None
+    finally:
+        primeira.close()
+    segunda = ip.travar_interface()  # a primeira fechou: liberou
+    assert segunda is not None
+    segunda.close()

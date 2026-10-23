@@ -2,8 +2,9 @@
 
 - interpretar as linhas que o login (abrir_redes) e a automação (interagir)
   imprimem sobre as contas, inclusive qual conta (perfil do navegador) está em uso;
-- montar a situação de cada conta (do banco) e o resumo da configuração e das planilhas;
-- conferir o que o usuário digita para as planilhas;
+- montar a situação de cada conta (do banco) e o resumo da configuração, das
+  planilhas e das pausas por aviso da rede;
+- conferir (e separar) o que o usuário digita ou cola para as planilhas;
 - apagar, com segurança, a pasta de uma conta removida.
 
 Na interface, "conta" é um perfil do navegador (banco.listar_perfis): uma pasta
@@ -16,7 +17,7 @@ import re
 import shutil
 import sqlite3
 from contextlib import redirect_stdout
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -75,7 +76,8 @@ def interpretar_linha(linha: str) -> list[EventoLogin]:
 
 
 # "Perfil: <nome>" é a primeira linha do login; "===== Perfil <nome> =====" vem
-# antes de cada conta na automação.
+# antes de cada conta na automação. O nome vai até o " =====" do fim, então pode
+# ter "=", espaços e acentos (o fim exige um espaço seguido só de "=").
 RE_PERFIL = re.compile(r"^(?:Perfil: (?P<login>.+)|=+ Perfil (?P<automacao>.+?) =+)$")
 # A automação com "recomeçar a lista" espera entre uma volta e outra.
 INICIO_ESPERA_RECOMECO = "Lista concluída. Recomeçando em"
@@ -143,6 +145,10 @@ def aplicar_evento(situacoes: dict[str, SituacaoLogin], evento: EventoLogin,
     situacao = situacoes.setdefault(evento.rede, SituacaoLogin(evento.rede))
     if evento.conta:
         situacao.conta = situacao.ultima_conta = evento.conta
+        if evento.logado is None and not situacao.logado:
+            # A conta só é lida com a rede logada: a automação imprime "[Rede] Conta: @x"
+            # sem um "Já logado" antes, e o banco pode ter um "não logado" antigo.
+            evento = replace(evento, logado=True, status="ja_logado")
     if evento.logado is not None:
         if evento.status:
             situacao.status = evento.status
@@ -328,6 +334,43 @@ def formatar_momento(iso: str | None, agora: datetime | None = None) -> str:
     return f"{momento:%d/%m/%Y} às {hora}"
 
 
+# ------------------------------------------------- pausas por aviso da rede
+
+def texto_pausas(pausas, agora: datetime | None = None, mostrar: int = 2) -> str:
+    """'Em pausa por aviso da rede: @conta no Instagram até 24/10 15:30' ("" se não há pausa).
+
+    `pausas` são as linhas de banco.pausas_ativas (rede, conta, motivo, inicio,
+    fim); rede ou conta "*" valem para todas. As que já acabaram ficam de fora.
+    """
+    agora = agora or datetime.now().astimezone()
+    if agora.tzinfo is None:
+        agora = agora.astimezone()
+    itens = []
+    for pausa in pausas:
+        try:
+            fim = datetime.fromisoformat(pausa["fim"]).astimezone()  # sem fuso: hora local
+        except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+            continue
+        if fim <= agora:
+            continue
+        conta, rede = str(pausa["conta"] or "?"), str(pausa["rede"] or "*")
+        if conta == "*":
+            quem = "todas as contas"
+        elif conta == "?":
+            quem = "uma conta não identificada"
+        else:
+            quem = conta if conta.startswith("@") else f"@{conta}"
+        onde = "em todas as redes" if rede == "*" else f"no {rede}"
+        itens.append((fim, f"{quem} {onde} até {fim:%d/%m %H:%M}"))
+    if not itens:
+        return ""
+    itens.sort(key=lambda item: item[0])
+    texto = "; ".join(descricao for _, descricao in itens[:mostrar])
+    if len(itens) > mostrar:
+        texto += f" e mais {len(itens) - mostrar}"
+    return f"Em pausa por aviso da rede: {texto}"
+
+
 # ------------------------------------------------------ configuração
 
 def ligado(valor: object) -> bool:
@@ -462,6 +505,42 @@ def resumo_destinatarios(compartilhar_com: str,
     return resumo
 
 
+def texto_links_invalidos(invalidos: list[str], mostrar: int = 3, tamanho: int = 45) -> str:
+    """'2 links inválidos serão ignorados: a, b' (a automação pula essas linhas e segue)."""
+    quantos = len(invalidos)
+    inicio = "1 link inválido será ignorado" if quantos == 1 else f"{quantos} links inválidos serão ignorados"
+    lista = ", ".join(encurtar(texto, tamanho) for texto in invalidos[:mostrar])
+    if quantos > mostrar:
+        lista += f" e mais {quantos - mostrar}"
+    return f"{inicio}: {lista}"
+
+
+# Um link novo pode vir colado ao anterior por vírgula ou ponto e vírgula
+# ("link1,link2"); as vírgulas de dentro de um link (?x=1,2) ficam.
+RE_VIRGULA_ANTES_DE_LINK = re.compile(r"[,;]+(?=(?:https?://|www\.|m\.)?(?:instagram|tiktok)\.com\b|https?://)",
+                                      re.IGNORECASE)
+
+
+def separar_links(texto: str) -> list[str]:
+    """Os links de perfil colados no campo: separados por espaço ou linha.
+
+    Vírgula e ponto e vírgula só separam quando vêm logo antes de outro link;
+    no meio de um link (parte depois do "?"), fazem parte dele.
+    """
+    partes = []
+    for bloco in texto.split():
+        for parte in RE_VIRGULA_ANTES_DE_LINK.split(bloco):
+            parte = parte.strip(",;")
+            if parte:
+                partes.append(parte)
+    return partes
+
+
+def separar_usuarios(texto: str) -> list[str]:
+    """Os usuários colados no campo: separados por espaço, linha, vírgula ou ponto e vírgula."""
+    return [parte for parte in re.split(r"[\s,;]+", texto) if parte]
+
+
 def link_do_perfil(rede: str, perfil: str) -> str:
     """Link padrão do perfil, como fica gravado na planilha."""
     if rede == "TikTok":
@@ -495,6 +574,9 @@ def validar_novo_perfil(texto: str, aba: str, existentes: list[str]) -> tuple[st
     return link_do_perfil(rede, perfil), None
 
 
+OBSERVACAO_INVALIDO = "inválido: será ignorado"
+
+
 def observacao_perfil(texto: str, aba: str, anteriores: list[str]) -> str:
     """Aviso para mostrar ao lado de um link já gravado na planilha ("" se está tudo certo)."""
     if not planilhas.eh_link_de_perfil(texto):
@@ -502,7 +584,7 @@ def observacao_perfil(texto: str, aba: str, anteriores: list[str]) -> str:
     try:
         rede, _ = interpretar_perfil(texto)
     except ValueError:
-        return "inválido: impede o início"
+        return OBSERVACAO_INVALIDO
     if chave_perfil(texto) in {chave_perfil(a) for a in anteriores}:
         return "repetido"
     if rede != planilhas.REDES_POR_ABA.get(aba):

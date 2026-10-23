@@ -482,7 +482,8 @@ def test_fazer_login_pela_aba_contas_atualiza_so_aquela_conta(janela, tmp_path):
     assert str(aba.botao_login.cget("state")) == "normal"
 
 
-def test_remover_com_processo_rodando_nao_apaga_a_pasta(janela, dialogos, tmp_path):
+def test_contas_ficam_travadas_com_processo_rodando(janela, dialogos, tmp_path):
+    """Com o login (ou a automação) rodando, nenhuma conta muda, nem as que não estão em uso."""
     loja, casa = criar_conta("Loja"), criar_conta("Casa")
     inicio, aba = janela.inicio, janela.contas
     inicio.scripts["login"] = criar_script(tmp_path / "login_loja.py", ["Perfil: Loja"], espera=30)
@@ -490,20 +491,29 @@ def test_remover_com_processo_rodando_nao_apaga_a_pasta(janela, dialogos, tmp_pa
     assert inicio.iniciar_login(loja)
     assert bombear(janela, lambda: "args:" in inicio.texto_da_saida())
 
-    aba.selecionar(loja)
-    aba.remover()  # em uso: nem pergunta
-    assert dialogos.nomes() == ["showwarning"] and conta_no_banco(loja) is not None
-
     pasta = banco.pasta_do_perfil(conta_no_banco(casa))
     pasta.mkdir(parents=True)
-    aba.selecionar(casa)
-    dialogos.respostas["askyesno"] = True
-    aba.remover()
-    assert conta_no_banco(casa) is None
-    assert pasta.exists() and dialogos.nomes()[-2:] == ["askyesno", "showinfo"]  # não oferece apagar
+    aba.selecionar(casa)  # selecionar continua valendo
+    assert aba.selecionada().id == casa
+    botoes = (aba.botao_adicionar, aba.botao_login, aba.botao_ativar, aba.botao_renomear, aba.botao_remover)
+    assert all(str(botao.cget("state")) == "disabled" for botao in botoes)
+    assert "não podem ser adicionadas, renomeadas" in aba.rotulo_estado.cget("text")
+
+    # Mesmo chamadas direto, as ações só explicam e não mudam nada.
+    dialogos.respostas.update(askyesno=True, askstring="Outro nome")
+    for acao in (aba.remover, aba.renomear, aba.alternar_ativo, aba.adicionar):
+        acao()
+    assert dialogos.nomes() == ["showinfo"] * 4
+    assert "Pare o processo na aba Início" in dialogos.chamadas[0][1][1]
+    assert [(c["nome"], c["ativo"]) for c in (conta_no_banco(loja), conta_no_banco(casa))] == [
+        ("Loja", 1), ("Casa", 1)]
+    with closing(banco.conectar()) as conn:
+        assert len(banco.listar_perfis(conn)) == 3
+    assert pasta.exists()
 
     inicio.parar()
     assert bombear(janela, lambda: not inicio.em_execucao)
+    assert all(str(botao.cget("state")) == "normal" for botao in botoes)
 
 
 def test_automacao_com_varias_contas_e_espera_para_recomecar(janela, tmp_path):
@@ -627,7 +637,8 @@ def cortados(widget):
 
 
 def test_nada_cortado_no_tamanho_minimo(janela):
-    """Na janela mínima (900 x 640 sem zoom), com dados de verdade, nada fica cortado em nenhuma aba."""
+    """Na janela mínima (900 x 640 sem zoom, ou o que a aba Início pedir), com dados de verdade, nada fica
+    cortado em nenhuma aba. Com zoom: test_interface_correcoes.py."""
     for nome in ("Loja do Centro", "Maria Aparecida de Souza"):
         criar_conta(nome)
     with closing(banco.conectar()) as conn:

@@ -1,6 +1,6 @@
 """Testes da parte da interface que não depende do Tkinter (interface_dados.py)."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -305,3 +305,64 @@ def test_observacoes_das_linhas_ja_gravadas():
     assert dados.observacao_destinatario("fulano", []) == ""
     assert dados.observacao_destinatario("@Fulano", ["fulano"]) == "repetido"
     assert dados.observacao_destinatario("não vale", []) == "inválido (ignorado)"
+
+
+# ------------------------------------------------------------ correções da interface
+
+def test_conta_lida_vale_como_logado_mesmo_com_nao_logado_antigo():
+    """Na automação, "[Rede] Conta: @x" vem sem "Já logado" antes: a rede está logada."""
+    situacoes = {"Instagram": SituacaoLogin("Instagram", "nao_logado", verificado_em="2026-10-01T10:00:00-03:00")}
+    for evento in dados.interpretar_linha("[Instagram] Conta: @fulano"):
+        dados.aplicar_evento(situacoes, evento, momento="2026-10-23T12:00:00-03:00")
+    instagram = situacoes["Instagram"]
+    assert instagram.logado and instagram.status == "ja_logado" and instagram.conta == "@fulano"
+    assert instagram.verificado_em == "2026-10-23T12:00:00-03:00"
+    assert dados.texto_login_curto(instagram) == "@fulano"
+    # Quem já estava logado não muda de status; "Não logado" depois ainda vale.
+    logado = {"TikTok": SituacaoLogin("TikTok", "login_detectado")}
+    dados.aplicar_evento(logado, EventoLogin("TikTok", conta="@x"))
+    assert logado["TikTok"].status == "login_detectado"
+    dados.aplicar_evento(situacoes, dados.interpretar_linha("[Instagram] Não logado — faça o login")[0])
+    assert not situacoes["Instagram"].logado
+
+
+@pytest.mark.parametrize(("texto", "partes"), [
+    ("https://www.instagram.com/fulano/?utm=a,b;c", ["https://www.instagram.com/fulano/?utm=a,b;c"]),
+    ("instagram.com/a, instagram.com/b;\ntiktok.com/@c", ["instagram.com/a", "instagram.com/b", "tiktok.com/@c"]),
+    ("https://www.instagram.com/a/,https://www.instagram.com/b/;www.tiktok.com/@c",
+     ["https://www.instagram.com/a/", "https://www.instagram.com/b/", "www.tiktok.com/@c"]),
+    ("  ,; ", []),
+])
+def test_separar_links_so_quebra_entre_links(texto, partes):
+    assert dados.separar_links(texto) == partes
+
+
+def test_separar_usuarios_aceita_virgula():
+    assert dados.separar_usuarios("@a, b;c\n d") == ["@a", "b", "c", "d"]
+
+
+def test_links_invalidos_sao_ignorados_como_na_automacao():
+    assert dados.texto_links_invalidos(["x"]) == "1 link inválido será ignorado: x"
+    assert dados.texto_links_invalidos(["a", "b", "c", "d"], mostrar=2) == (
+        "4 links inválidos serão ignorados: a, b e mais 2")
+    assert dados.observacao_perfil("https://www.instagram.com/p/ABC/", "instagram", []) == "inválido: será ignorado"
+
+
+def test_texto_das_pausas_por_aviso():
+    agora = datetime(2026, 10, 23, 15, 0).astimezone()
+    fim = lambda horas: (agora + timedelta(hours=horas)).isoformat()  # noqa: E731
+    pausas = [{"rede": "TikTok", "conta": "@b", "fim": fim(48)}, {"rede": "Instagram", "conta": "@a", "fim": fim(24)},
+              {"rede": "Instagram", "conta": "@velha", "fim": fim(-1)}, {"rede": "*", "conta": "*", "fim": fim(30)},
+              {"rede": "TikTok", "conta": "?", "fim": "não é data"}]
+    assert dados.texto_pausas([], agora=agora) == ""
+    assert dados.texto_pausas(pausas[:1], agora=agora) == "Em pausa por aviso da rede: @b no TikTok até 25/10 15:00"
+    assert dados.texto_pausas(pausas, agora=agora) == (
+        "Em pausa por aviso da rede: @a no Instagram até 24/10 15:00; "
+        "todas as contas em todas as redes até 24/10 21:00 e mais 1")
+    assert dados.texto_pausas(pausas[2:3], agora=agora) == ""  # já acabou
+
+
+def test_texto_das_pausas_do_banco(conn):
+    banco.registrar_pausa(conn, "Instagram", "@Fulano", "Tente novamente mais tarde", 24)
+    texto = dados.texto_pausas(banco.pausas_ativas(conn))
+    assert texto.startswith("Em pausa por aviso da rede: @fulano no Instagram até ")

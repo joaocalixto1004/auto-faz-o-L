@@ -6,6 +6,10 @@ perfis/. Aqui dá para adicionar, fazer login, ativar ou desativar, renomear e
 remover contas. O login roda pela aba Início (o mesmo processo, a mesma saída
 e o mesmo botão Parar), então só um navegador abre por vez.
 
+Enquanto o login ou a automação rodam, a lista de contas fica travada (sem
+adicionar, renomear, ativar/desativar nem remover): a automação relê as contas
+no meio da execução, e uma mudança ali mudaria o que ela está fazendo.
+
 A situação das contas vem da aba Início (AbaInicio.contas), que relê o banco e
 acompanha a saída do processo ao vivo; esta aba só mostra e manda mudar.
 """
@@ -25,6 +29,11 @@ AJUDA = ("Cada conta é um perfil separado do Chrome, com um login do Instagram 
          "Os logins ficam salvos: só é preciso logar de novo se a rede pedir. A automação usa as "
          "contas ativas, uma depois da outra, e pula as inativas. A Principal é a conta que o "
          "programa já usava e não pode ser removida.")
+
+# Por que os botões ficam desligados enquanto algo roda (mostrado se alguém tentar mesmo assim).
+TRAVADA = ("Enquanto o login ou a automação estão rodando, as contas não podem ser adicionadas, "
+           "renomeadas, ativadas/desativadas nem removidas: a automação usa essa lista enquanto roda.\n\n"
+           "Pare o processo na aba Início e tente de novo.")
 
 # (coluna, título, exemplo de texto que define a largura inicial)
 COLUNAS = (("nome", "Nome", "Conta da Maria Silva"), ("Instagram", "Instagram", "@fulano.da_silva_"),
@@ -124,13 +133,23 @@ class AbaContas(ttk.Frame):
         self._atualizar_botoes()
 
     def _atualizar_botoes(self) -> None:
+        """Com algo em execução, só a seleção funciona (o rodapé explica por quê)."""
         conta = self.selecionada()
-        tem = "normal" if conta else "disabled"
-        self.botao_login.configure(state="normal" if conta and not self.inicio.em_execucao else "disabled")
-        self.botao_ativar.configure(state=tem, text=("Desativar" if conta.ativo else "Ativar") if conta
-                                    else "Ativar/Desativar")
-        self.botao_renomear.configure(state=tem)
-        self.botao_remover.configure(state="normal" if conta and not conta.principal else "disabled")
+        livre = not self.inicio.em_execucao
+        estado = lambda ligado: "normal" if ligado else "disabled"  # noqa: E731
+        self.botao_adicionar.configure(state=estado(livre))
+        self.botao_login.configure(state=estado(conta and livre))
+        self.botao_ativar.configure(state=estado(conta and livre),
+                                    text=("Desativar" if conta.ativo else "Ativar") if conta else "Ativar/Desativar")
+        self.botao_renomear.configure(state=estado(conta and livre))
+        self.botao_remover.configure(state=estado(conta and livre and not conta.principal))
+
+    def _travada(self, titulo: str) -> bool:
+        """True (e avisa) se as contas não podem mudar agora, porque há um processo em execução."""
+        if not self.inicio.em_execucao:
+            return False
+        messagebox.showinfo(titulo, TRAVADA, parent=self)
+        return True
 
     def _mostrar_estado(self) -> None:
         inicio = self.inicio
@@ -139,11 +158,12 @@ class AbaContas(ttk.Frame):
             if inicio.tipo == "login":
                 onde = f" na conta {em_uso.nome}" if em_uso else ""
                 texto = (f"Login em execução{onde}: faça o login no Chrome e, quando terminar, clique em "
-                         "Parar na aba Início. Só um navegador abre por vez.")
+                         "Parar na aba Início. Só um navegador abre por vez; até lá, as contas não podem "
+                         "ser adicionadas, renomeadas, ativadas/desativadas nem removidas.")
             else:
                 onde = f" (agora na conta {em_uso.nome})" if em_uso else ""
-                texto = (f"Automação em execução{onde}. Para fazer login em outra conta, pare a "
-                         "automação na aba Início.")
+                texto = (f"Automação em execução{onde}. Para adicionar, renomear, ativar/desativar ou "
+                         "remover contas, ou fazer login em outra, pare a automação na aba Início.")
             self.rotulo_estado.configure(text=texto, style="Sistema.TLabel")
             return
         total = len(inicio.contas)
@@ -161,6 +181,8 @@ class AbaContas(ttk.Frame):
 
     def adicionar(self) -> None:
         """Pede o nome, cadastra a conta e oferece fazer o login dela."""
+        if self._travada("Adicionar conta"):
+            return
         nome = simpledialog.askstring(
             "Adicionar conta", "Nome da nova conta (só para você reconhecer, por exemplo \"Loja\" ou \"Maria\"):",
             parent=self)
@@ -179,10 +201,6 @@ class AbaContas(ttk.Frame):
         self._mensagem = f"Conta {nome} adicionada."
         self.inicio.atualizar_contas()
         self.selecionar(perfil_id)
-        if self.inicio.em_execucao:
-            messagebox.showinfo("Adicionar conta", f"A conta {nome} foi adicionada.\n\nQuando o processo em "
-                                "execução terminar, selecione a conta e clique em Fazer login.", parent=self)
-            return
         if messagebox.askyesno(
                 "Adicionar conta",
                 f"A conta {nome} foi adicionada.\n\nFazer o login dela agora?\nO Chrome abre com uma aba do "
@@ -205,7 +223,7 @@ class AbaContas(ttk.Frame):
 
     def alternar_ativo(self) -> None:
         conta = self.selecionada()
-        if conta is None:
+        if conta is None or self._travada("Ativar/Desativar"):
             return
         try:
             with closing(banco.conectar()) as conn:
@@ -222,7 +240,7 @@ class AbaContas(ttk.Frame):
 
     def renomear(self) -> None:
         conta = self.selecionada()
-        if conta is None:
+        if conta is None or self._travada("Renomear conta"):
             return
         novo = simpledialog.askstring("Renomear conta", "Novo nome da conta:", initialvalue=conta.nome,
                                       parent=self)
@@ -249,9 +267,7 @@ class AbaContas(ttk.Frame):
         if conta.principal:
             messagebox.showinfo("Remover conta", "A conta Principal não pode ser removida.", parent=self)
             return
-        if self.inicio.em_execucao and self.inicio.perfil_em_uso == conta.id:
-            messagebox.showwarning("Remover conta", f"A conta {conta.nome} está em uso agora. Pare o processo "
-                                   "na aba Início antes de removê-la.", parent=self)
+        if self._travada("Remover conta"):
             return
         if not messagebox.askyesno(
                 "Remover conta", f"Remover a conta {conta.nome} da lista?\n\nA automação deixa de usar esta "
@@ -275,13 +291,7 @@ class AbaContas(ttk.Frame):
         if not pasta.exists():
             return  # a conta nunca chegou a abrir o navegador
         mostrar = dados.nome_de_pasta_para_mostrar(pasta)
-        if not dados.pasta_pode_ser_apagada(pasta):
-            self._informar(f"{self._mensagem} A pasta {mostrar} foi mantida.")
-            return
-        if self.inicio.em_execucao:
-            messagebox.showinfo(
-                "Remover conta", f"A pasta com o login salvo desta conta foi mantida, porque há um processo "
-                f"em execução:\n{mostrar}\n\nSe quiser, apague-a depois que o processo terminar.", parent=self)
+        if not dados.pasta_pode_ser_apagada(pasta) or self.inicio.em_execucao:
             self._informar(f"{self._mensagem} A pasta {mostrar} foi mantida.")
             return
         if not messagebox.askyesno(

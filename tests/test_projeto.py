@@ -111,10 +111,17 @@ def test_iniciar_bat_faz_o_que_o_leigo_precisa():
     assert "irm https://astral.sh/uv/install.ps1 | iex" in texto and "-ExecutionPolicy ByPass" in texto
     assert '"%UV%" venv --python 3.12' in texto
     assert '"%PYTHON%" -m automacao.instalacao --preparar --uv "%UV%"' in texto
-    assert '/min "%PYTHON%" -m automacao.interface' in texto and texto.count("start ") == 1
+    # A janela roda no console minimizado (este mesmo arquivo com --janela), com a saída no log.
+    assert '/min "%ComSpec%" /c call "%~f0" --janela' in texto and texto.count("start ") == 1
+    assert '"%PYTHON%" -m automacao.interface >>"%LOG_INTERFACE%" 2>&1' in texto
+    assert 'set "LOG_INTERFACE=%RAIZ%\\logs\\interface.log"' in texto
+    assert "Get-Content -LiteralPath $env:LOG_INTERFACE -Tail 20" in texto  # mostra o fim se ela cair
     comandos = [linha for linha in texto.splitlines() if not linha.lstrip().lower().startswith("rem")]
     assert not any("pythonw" in linha for linha in comandos)  # com console, o Parar funciona com calma
     assert "pause" in comandos
+    # A falha ao criar o .venv mostra o código do uv, não culpa sempre a internet.
+    linha_venv = next(linha for linha in comandos if "Não consegui criar o ambiente Python" in linha)
+    assert "%CODIGO%" in linha_venv and "Confira a internet e abra de novo" not in linha_venv
 
 
 @pytest.mark.parametrize("nome", ["iniciar.sh", "instalar_atalho.sh"])
@@ -135,3 +142,106 @@ def test_iniciar_sh_chama_o_preparo_e_abre_a_interface():
     assert '-m automacao.instalacao --verificar --silencioso' in texto
     assert '-m automacao.instalacao --preparar --uv "$UV"' in texto
     assert texto.count("-m automacao.interface") == 2  # com setsid ou, na falta dele, nohup
+    assert 'bash "$RAIZ/instalar_atalho.sh" --silencioso' in texto
+    assert "Confira a internet e abra de novo" not in texto.split("criar_venv()", 1)[1].split("preparar()", 1)[0]
+
+
+# ------------------------------------------------------------ ícone do Linux (sem tocar no HOME de verdade)
+
+so_com_bash = pytest.mark.skipif(sys.platform == "win32" or not shutil.which("bash"), reason="scripts do Linux")
+
+
+def _projeto_e_casa_falsos(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    """Uma cópia dos lançadores numa pasta com espaço e acento, e um HOME temporário.
+
+    Os programas que mexeriam fora do temporário (gio fala com um serviço do
+    usuário de verdade; xdg-user-dir lê a Área de Trabalho de verdade) e os que
+    instalariam algo (uv, curl, wget) são trocados por falsos.
+    """
+    projeto = tmp_path / "projeto da automação"
+    projeto.mkdir()
+    for nome in ("iniciar.sh", "instalar_atalho.sh"):
+        shutil.copy2(RAIZ / nome, projeto / nome)
+    casa = tmp_path / "casa"
+    (casa / "Desktop").mkdir(parents=True)
+    falsos = tmp_path / "bin"
+    falsos.mkdir()
+    for nome, corpo in {"gio": "exit 0", "update-desktop-database": "exit 0", "xdg-user-dir": 'echo "$HOME/Desktop"',
+                        "uv": "exit 1", "curl": "exit 1", "wget": "exit 1", "setsid": "exit 1",
+                        "nohup": "exit 1"}.items():
+        (falsos / nome).write_text(f"#!/bin/sh\n{corpo}\n", encoding="utf-8")
+        (falsos / nome).chmod(0o755)
+    ambiente = {"HOME": str(casa), "XDG_DATA_HOME": str(casa / "share"), "XDG_CONFIG_HOME": str(casa / "config"),
+                "PATH": f"{falsos}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}", "LANG": "C.UTF-8"}
+    return projeto, ambiente
+
+
+def _bash(argumentos: list[str], ambiente: dict[str, str]) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", *argumentos], env=ambiente, capture_output=True, text=True, encoding="utf-8",
+                          timeout=60, stdin=subprocess.DEVNULL)
+
+
+@so_com_bash
+def test_instalar_atalho_cria_o_icone_no_menu_e_na_area_de_trabalho(tmp_path):
+    projeto, ambiente = _projeto_e_casa_falsos(tmp_path)
+    menu = Path(ambiente["XDG_DATA_HOME"]) / "applications" / "automacao-redes-sociais.desktop"
+    area = Path(ambiente["HOME"]) / "Desktop" / "automacao-redes-sociais.desktop"
+
+    saida = _bash([str(projeto / "instalar_atalho.sh")], ambiente)
+    assert saida.returncode == 0, saida.stderr
+    assert "✔ Atalho criado" in saida.stdout
+    linhas = menu.read_text(encoding="utf-8").splitlines()
+    assert f'Exec=bash "{projeto}/iniciar.sh"' in linhas and f"Path={projeto}" in linhas
+    assert "Terminal=true" in linhas and os.access(menu, os.X_OK)
+    assert area.read_text(encoding="utf-8") == menu.read_text(encoding="utf-8")
+
+    menu.unlink()
+    silencioso = _bash([str(projeto / "instalar_atalho.sh"), "--silencioso"], ambiente)
+    assert (silencioso.returncode, silencioso.stdout) == (0, "") and menu.exists()
+    errada = _bash([str(projeto / "instalar_atalho.sh"), "--outra"], ambiente)
+    assert errada.returncode == 2 and "Opção desconhecida" in errada.stderr
+
+
+@so_com_bash
+def test_iniciar_sh_cria_o_icone_so_quando_falta(tmp_path):
+    """O iniciar.sh (carregado com source, sem abrir nada) cria o ícone se ele falta ou é de outra pasta."""
+    projeto, ambiente = _projeto_e_casa_falsos(tmp_path)
+    menu = Path(ambiente["XDG_DATA_HOME"]) / "applications" / "automacao-redes-sociais.desktop"
+    area = Path(ambiente["HOME"]) / "Desktop" / "automacao-redes-sociais.desktop"
+    # O shift tira o caminho dos argumentos: o iniciar.sh carregado vê "sem opção".
+    garantir = ["-c", 'arquivo=$1; shift; source "$arquivo" && garantir_atalho', "iniciar", str(projeto / "iniciar.sh")]
+
+    primeira = _bash(garantir, ambiente)
+    assert primeira.returncode == 0, primeira.stderr
+    assert primeira.stdout.strip() == ('✔ Atalho criado: procure "Automação das redes sociais" no menu ou na '
+                                       'Área de Trabalho.')
+    assert f'Exec=bash "{projeto}/iniciar.sh"' in menu.read_text(encoding="utf-8").splitlines()
+
+    area.unlink()  # a pessoa apagou o ícone da Área de Trabalho de propósito
+    conteudo, data = menu.read_bytes(), menu.stat().st_mtime_ns
+    segunda = _bash(garantir, ambiente)
+    assert (segunda.returncode, segunda.stdout) == (0, "")
+    assert menu.read_bytes() == conteudo and menu.stat().st_mtime_ns == data and not area.exists()
+
+    # O projeto mudou de lugar: o ícone aponta para a pasta antiga e é refeito.
+    menu.write_text(conteudo.decode("utf-8").replace(str(projeto), "/pasta/antiga"), encoding="utf-8")
+    terceira = _bash(garantir, ambiente)
+    assert "✔ Atalho criado" in terceira.stdout
+    assert f'Exec=bash "{projeto}/iniciar.sh"' in menu.read_text(encoding="utf-8").splitlines()
+
+    # Sem conseguir criar (pasta do menu bloqueada por um arquivo), só avisa e segue.
+    menu.unlink()
+    (Path(ambiente["XDG_DATA_HOME"]) / "applications").rmdir()
+    (Path(ambiente["XDG_DATA_HOME"]) / "applications").write_text("", encoding="utf-8")
+    quarta = _bash(garantir, ambiente)
+    assert quarta.returncode == 0 and quarta.stdout.startswith("Aviso: não consegui criar o ícone")
+
+
+@so_com_bash
+def test_iniciar_sh_verificar_nao_cria_o_icone(tmp_path):
+    projeto, ambiente = _projeto_e_casa_falsos(tmp_path)
+    menu = Path(ambiente["XDG_DATA_HOME"]) / "applications" / "automacao-redes-sociais.desktop"
+    saida = _bash([str(projeto / "iniciar.sh"), "--verificar"], ambiente)
+    assert saida.returncode == 1  # a cópia não tem .venv
+    assert "Ícone no menu de aplicativos: ainda não existe" in saida.stdout
+    assert not menu.exists() and not (projeto / "logs").exists()

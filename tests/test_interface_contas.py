@@ -31,6 +31,12 @@ def test_conftest_aponta_as_pastas_das_contas_para_o_temporario(tmp_path):
     ("===== Perfil Loja =====", "Loja"),
     ("  ===== Perfil Loja   do Centro =====  ", "Loja do Centro"),
     ("===== Perfil A = B =====", "A = B"),
+    # O nome vai até o " =====" do fim: "=", espaços e acentos não atrapalham.
+    ("===== Perfil a=b =====", "a=b"),
+    ("===== Perfil Loja = =====", "Loja ="),
+    ("===== Perfil == Perfil == =====", "== Perfil =="),
+    ("===== Perfil Conta da Márcia (ç) =====", "Conta da Márcia (ç)"),
+    ("Perfil: x = y", "x = y"),
 ])
 def test_perfil_da_linha_reconhece(linha, nome):
     assert dados.perfil_da_linha(linha) == nome
@@ -74,7 +80,8 @@ def test_saida_da_automacao_atualiza_cada_conta():
     assert (principal.login("Instagram").conta, principal.login("TikTok").conta) == ("@principal_ig", "@principal_tt")
     assert loja.login("Instagram").conta == "@loja_ig" and loja.login("TikTok").conta is None
     assert all(not s.conta for s in casa.logins.values())  # "@sem_dono" veio antes de qualquer conta
-    assert dados.texto_login_curto(loja.login("Instagram")) == "@loja_ig"  # conta lida, login não verificado
+    assert dados.texto_login_curto(loja.login("Instagram")) == "@loja_ig"  # conta lida: a rede está logada
+    assert loja.login("Instagram").logado and not loja.login("TikTok").logado
 
 
 def test_saida_do_login_vale_para_a_conta_do_login():

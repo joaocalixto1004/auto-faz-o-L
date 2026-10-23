@@ -44,7 +44,7 @@ Se mudar a pasta do projeto de lugar, abra pelo `iniciar.sh` uma vez: ele refaz 
 recriar um ícone apagado da Área de Trabalho, rode `./instalar_atalho.sh`.
 
 Se algo der errado, a mensagem fica na tela até você apertar uma tecla, e os detalhes ficam em
-`logs/instalacao.log`. Quase sempre é falta de internet: confira a conexão e abra de novo.
+`logs/instalacao.log` (e, se a janela fechar logo depois de abrir, em `logs/interface.log`).
 
 ### 2. Primeiro login
 
@@ -72,7 +72,9 @@ TikTok**. Para usar mais contas, vá na aba **Contas**:
 - **Renomear…** e **Remover…**: remover tira a conta da lista e depois pergunta se apaga também a
   pasta com o login salvo. A Principal não pode ser removida.
 
-Não precisa logar nas duas redes: uma conta só com Instagram é usada só no Instagram.
+Não precisa logar nas duas redes: uma conta só com Instagram é usada só no Instagram. Enquanto
+um login ou a automação estiver rodando, os botões desta aba ficam desligados (mudar as contas no
+meio atrapalharia a execução).
 
 ### 4. As abas da janela
 
@@ -97,6 +99,8 @@ Não precisa logar nas duas redes: uma conta só com Instagram é usada só no I
 - **Saída do processo**: o que o programa está fazendo, em tempo real.
 
 Só uma coisa roda por vez (login ou automação), porque as duas usam os mesmos perfis do Chrome.
+Também só abre uma janela do programa por vez: clicar no ícone de novo só avisa que ela já está
+aberta. Se uma conta estiver em pausa por aviso da rede, a aba Início mostra até quando.
 
 **Se a janela do navegador for fechada, ela reabre sozinha** em alguns segundos, e a automação
 continua de onde parou. Para encerrar de verdade, use sempre o **Parar**. Fechar a janela do
@@ -141,8 +145,9 @@ As duas planilhas da pasta `data/`, com uma aba para o Instagram e outra para o 
 - **Compartilhar com** (`para_compartilhar.xlsx`): quem recebe as publicações por mensagem.
   Digite só o usuário (o @ é opcional).
 
-Dá para colar vários de uma vez, separados por espaço, vírgula ou linha. Repetidos e links da
-rede errada são recusados. O arquivo só muda ao clicar em **Salvar planilha**; feche a planilha
+Dá para colar vários de uma vez, separados por espaço ou por linha (uma vírgula também separa
+quando outro link vem logo depois). Repetidos e links da rede errada são recusados. Se a planilha
+tiver links inválidos, eles são ignorados e a janela pergunta antes de iniciar. O arquivo só muda ao clicar em **Salvar planilha**; feche a planilha
 no Excel ou no LibreOffice antes de salvar. Anotações que você puser em outras colunas continuam
 na linha do seu perfil.
 

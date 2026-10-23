@@ -13,13 +13,22 @@ from tkinter import ttk
 # Widgets que já usam a roda do mouse para si (rolar a lista, mudar o número...).
 _USAM_A_RODA = {"Listbox", "Text", "Treeview", "TCombobox", "TSpinbox", "Spinbox", "Scale", "TScale"}
 
+# Folga para alargar a quebra do texto: diferenças menores não requebram. Sem
+# ela, um rótulo que muda de altura ao requebrar pode fazer o vizinho (uma
+# barra de rolagem, outra coluna) mudar a largura dele, num vaivém sem fim.
+FOLGA_QUEBRA = 4
+
 
 def quebrar_na_largura(rotulo: ttk.Label, margem: int = 6, minimo: int = 120) -> ttk.Label:
     """Faz o texto do rótulo quebrar na largura que ele ocupa na tela.
 
     O rótulo precisa ser posto com sticky="ew" (ou fill="x"), para ocupar a
-    largura disponível; `margem` desconta a borda interna do próprio rótulo. Crie-o com um wraplength inicial modesto: ele vira o
-    pedido de largura enquanto a janela não aparece.
+    largura disponível; `margem` desconta a borda interna do próprio rótulo.
+    Crie-o com um wraplength inicial modesto: ele vira o pedido de largura
+    enquanto a janela não aparece.
+
+    Quando o rótulo estreita, o texto requebra na hora (nada fica cortado); quando
+    alarga, só requebra se sobrar mais que FOLGA_QUEBRA pixels.
     """
     def ajustar(evento: tk.Event) -> None:
         largura = max(evento.width - margem, minimo)
@@ -27,7 +36,7 @@ def quebrar_na_largura(rotulo: ttk.Label, margem: int = 6, minimo: int = 120) ->
             atual = int(str(rotulo.cget("wraplength")) or 0)
         except ValueError:
             atual = 0
-        if atual != largura:
+        if largura < atual or largura - atual > FOLGA_QUEBRA:
             rotulo.configure(wraplength=largura)
 
     rotulo.bind("<Configure>", ajustar, add="+")

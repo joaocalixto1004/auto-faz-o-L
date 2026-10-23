@@ -3,14 +3,17 @@
 #
 # Na primeira vez, instala sozinho o que falta: o uv (que baixa o Python 3.12),
 # as dependências e, se o Google Chrome não estiver instalado, o Chromium do
-# Playwright. Nas outras vezes só confere (é rápido) e abre a janela.
+# Playwright, e cria o ícone "Automação das redes sociais" no menu de
+# aplicativos e na Área de Trabalho. Nas outras vezes só confere (é rápido) e
+# abre a janela.
 #
 # Uso:
 #   ./iniciar.sh              prepara o que faltar e abre a interface
-#   ./iniciar.sh --verificar  só confere o que falta (não instala nem abre nada)
-#   ./iniciar.sh --preparar   prepara o que faltar, sem abrir a interface
+#   ./iniciar.sh --verificar  só confere o que falta (não instala, não cria o ícone, não abre nada)
+#   ./iniciar.sh --preparar   prepara o que faltar (e o ícone), sem abrir a interface
 #
-# Para ter um ícone de dois cliques no menu e na Área de Trabalho: ./instalar_atalho.sh
+# O ícone é recriado se sumir do menu ou se a pasta do projeto mudar de lugar
+# (o mesmo que rodar ./instalar_atalho.sh).
 
 set -uo pipefail
 
@@ -23,13 +26,14 @@ LOG="$PASTA_LOGS/instalacao.log"
 LOG_INTERFACE="$PASTA_LOGS/interface.log"
 URL_UV="https://astral.sh/uv/install.sh"
 UV=""
+NOME_ATALHO="automacao-redes-sociais.desktop"   # o mesmo do instalar_atalho.sh
 
 ajuda() {
     cat <<'FIM'
 Uso: ./iniciar.sh [--verificar | --preparar]
   (sem opção)   prepara o que faltar e abre a interface
-  --verificar   só confere o que falta (não instala nem abre nada)
-  --preparar    prepara o que faltar, sem abrir a interface
+  --verificar   só confere o que falta (não instala, não cria o ícone, não abre nada)
+  --preparar    prepara o que faltar (e o ícone do menu), sem abrir a interface
 FIM
 }
 
@@ -108,6 +112,12 @@ criar_venv() {
     fi
     avisar "Criando o ambiente Python em .venv (o uv baixa o Python 3.12 se preciso)..."
     UV_VENV_CLEAR=1 "$UV" "${opcoes[@]}" "$RAIZ/.venv" 2>&1 | tee -a "$LOG"
+    local codigo=${PIPESTATUS[0]}
+    registrar "uv venv terminou com o código $codigo."
+    if [ "$codigo" -ne 0 ]; then
+        # O motivo de verdade é o que o uv escreveu (na tela, logo acima, e no log).
+        falhar "Não consegui criar o ambiente Python (.venv): o uv terminou com o código $codigo. O motivo está na mensagem do uv logo acima. Causas comuns: sem internet para baixar o Python, disco cheio ou pasta sem permissão de escrita."
+    fi
 }
 
 preparar() {
@@ -117,14 +127,40 @@ preparar() {
     encontrar_uv || instalar_uv
     registrar "uv: $UV ($("$UV" --version 2>&1))"
     if ! { [ -x "$PYTHON" ] && "$PYTHON" -c "pass" >/dev/null 2>&1; }; then
-        criar_venv || falhar "Não consegui criar o ambiente Python (.venv). Confira a internet e abra de novo."
+        criar_venv
     fi
     "$PYTHON" -m automacao.instalacao --preparar --uv "$UV" || falhar "A preparação não terminou (veja a mensagem acima)."
+}
+
+atalho_do_menu() {  # onde fica o ícone do menu de aplicativos (como no instalar_atalho.sh)
+    printf '%s/applications/%s' "${XDG_DATA_HOME:-${HOME:-}/.local/share}" "$NOME_ATALHO"
+}
+
+atalho_em_dia() {  # o ícone do menu existe e abre o iniciar.sh desta pasta?
+    local atalho
+    atalho=$(atalho_do_menu)
+    [ -f "$atalho" ] && grep -qxF -- "Exec=bash \"${RAIZ//%/%%}/iniciar.sh\"" "$atalho"
+}
+
+garantir_atalho() {
+    # Só o ícone do menu é conferido: se a pessoa apagou o da Área de Trabalho de
+    # propósito, ele não volta. Um problema aqui nunca impede a janela de abrir.
+    [ -n "${HOME:-}" ] || return 0
+    atalho_em_dia && return 0
+    if bash "$RAIZ/instalar_atalho.sh" --silencioso; then
+        registrar "iniciar.sh: ícone criado em $(atalho_do_menu)."
+        avisar "✔ Atalho criado: procure \"Automação das redes sociais\" no menu ou na Área de Trabalho."
+    else
+        registrar "iniciar.sh: não consegui criar o ícone."
+        avisar "Aviso: não consegui criar o ícone no menu (a janela abre mesmo assim; para tentar de novo: ./instalar_atalho.sh)."
+    fi
+    return 0
 }
 
 abrir_interface() {
     mkdir -p "$PASTA_LOGS"
     registrar "iniciar.sh: abrindo a interface."
+    printf '\n[%s] iniciar.sh: abrindo a interface.\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$LOG_INTERFACE" 2>/dev/null
     avisar "Abrindo a janela da automação..."
     # Numa sessão própria (setsid) e sem ligação com o terminal: fechar o terminal
     # não fecha a janela. O Parar da interface continua funcionando (usa sinais do Linux).
@@ -149,14 +185,30 @@ abrir_interface() {
     avisar "Pronto. Pode fechar este terminal: a janela continua aberta."
 }
 
+informar_atalho() {  # para o --verificar: só diz, não cria nada
+    if atalho_em_dia; then
+        avisar "✔ Ícone no menu de aplicativos: $(atalho_do_menu)"
+    else
+        avisar "• Ícone no menu de aplicativos: ainda não existe ou é de outra pasta (o ./iniciar.sh cria sozinho)."
+    fi
+}
+
+# Carregado com "source" (os testes fazem isso), só define as funções acima.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
+
 case "$modo" in
     verificar)
         if [ ! -x "$PYTHON" ]; then
             avisar "✘ Ambiente Python: a pasta .venv ainda não existe (rode ./iniciar.sh para instalar)."
+            informar_atalho
             exit 1
         fi
         "$PYTHON" -m automacao.instalacao --verificar
-        exit $?
+        codigo=$?
+        informar_atalho  # o ícone não muda o resultado da conferência
+        exit $codigo
         ;;
     preparar)
         if pronto; then
@@ -164,9 +216,11 @@ case "$modo" in
         else
             preparar
         fi
+        garantir_atalho
         ;;
     abrir)
         pronto || preparar
+        garantir_atalho
         abrir_interface
         ;;
 esac

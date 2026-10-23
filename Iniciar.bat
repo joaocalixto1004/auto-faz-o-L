@@ -11,6 +11,7 @@ rem
 rem Uso: Iniciar.bat               prepara o que faltar e abre a interface
 rem      Iniciar.bat --verificar   só confere o que falta (não instala nem abre nada)
 rem      Iniciar.bat --preparar    prepara o que faltar, sem abrir a interface
+rem      (--janela é interno: é como este arquivo roda a janela no console minimizado)
 
 title Automação das redes sociais
 rem pushd também funciona se a pasta estiver na rede (\\servidor\pasta).
@@ -19,14 +20,18 @@ set "RAIZ=%CD%"
 set "PYTHON=%RAIZ%\.venv\Scripts\python.exe"
 set "LOGS=%RAIZ%\logs"
 set "LOG=%RAIZ%\logs\instalacao.log"
+set "LOG_INTERFACE=%RAIZ%\logs\interface.log"
+set "FIM_JANELA=%RAIZ%\logs\interface.fim"
 set "UV="
 
 set "MODO=abrir"
 if /i "%~1"=="--verificar" set "MODO=verificar"
 if /i "%~1"=="--preparar" set "MODO=preparar"
+if /i "%~1"=="--janela" set "MODO=janela"
 if not "%~1"=="" if "%MODO%"=="abrir" goto opcao_desconhecida
 
 if "%MODO%"=="verificar" goto verificar
+if "%MODO%"=="janela" goto janela
 
 call :pronto
 if not errorlevel 1 goto ja_pronto
@@ -41,11 +46,45 @@ if "%MODO%"=="preparar" echo ✔ Tudo pronto; nada a instalar.
 if "%MODO%"=="preparar" goto fim_ok
 
 echo Abrindo a janela da automação...
+if not exist "%LOGS%" mkdir "%LOGS%"
+>>"%LOG_INTERFACE%" echo.
+>>"%LOG_INTERFACE%" echo [%date% %time%] Iniciar.bat: abrindo a interface.
+if exist "%FIM_JANELA%" del /q "%FIM_JANELA%" >nul 2>&1
 rem Console minimizado com o python.exe (não o pythonw): o Parar da interface
 rem continua parando com calma. Essa janela minimizada não deve ser fechada.
-start "Automação das redes sociais - não feche esta janela" /min "%PYTHON%" -m automacao.interface
+rem Ela roda este mesmo arquivo com --janela, que guarda a saída da janela em
+rem logs\interface.log e, quando ela fecha, o código de saída em logs\interface.fim.
+start "Automação das redes sociais - não feche esta janela" /min "%ComSpec%" /c call "%~f0" --janela
 if errorlevel 1 goto falhou
+rem Se a janela fechar logo depois de abrir (erro, falta de algo...), mostra o motivo em vez de sumir.
+for /l %%I in (1,1,8) do (
+    if exist "%FIM_JANELA%" goto janela_fechou
+    ping -n 2 127.0.0.1 >nul
+)
 goto fim_ok
+
+:janela_fechou
+set "CODIGO_JANELA="
+set /p CODIGO_JANELA=<"%FIM_JANELA%"
+if "%CODIGO_JANELA%"=="0" goto fim_ok
+echo.
+echo ✘ A janela fechou logo depois de abrir (código %CODIGO_JANELA%). Últimas linhas de logs\interface.log:
+call :mostrar_fim_do_log
+>>"%LOG%" echo [%date% %time%] ERRO: a interface fechou logo depois de abrir (código %CODIGO_JANELA%).
+goto falhou
+
+
+rem ---------------------------------------------------------------- janela (modo interno)
+
+:janela
+rem Roda a janela guardando a saída (e os erros) em logs\interface.log, como o iniciar.sh do Linux.
+title Automação das redes sociais - não feche esta janela
+if not exist "%LOGS%" mkdir "%LOGS%"
+"%PYTHON%" -m automacao.interface >>"%LOG_INTERFACE%" 2>&1
+set "CODIGO=%errorlevel%"
+>"%FIM_JANELA%" echo %CODIGO%
+popd
+exit /b %CODIGO%
 
 
 rem ---------------------------------------------------------------- verificar
@@ -64,6 +103,14 @@ exit /b %CODIGO%
 
 
 rem ---------------------------------------------------------------- subrotinas
+
+:mostrar_fim_do_log
+rem As últimas 20 linhas do log da janela (o caminho vai pela variável: nada de aspas a escapar).
+set "POWERSHELL=powershell"
+if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+"%POWERSHELL%" -NoProfile -Command "Get-Content -LiteralPath $env:LOG_INTERFACE -Tail 20 -Encoding UTF8" 2>nul
+if errorlevel 1 type "%LOG_INTERFACE%"
+exit /b 0
 
 :pronto
 rem errorlevel 0 se já está tudo instalado (conferência rápida, sem instalar nada).
@@ -133,7 +180,7 @@ set "UV_VENV_CLEAR=1"
 set "CODIGO=%errorlevel%"
 set "UV_VENV_CLEAR="
 >>"%LOG%" echo [%date% %time%] uv venv terminou com o código %CODIGO%.
-if not "%CODIGO%"=="0" echo ✘ Não consegui criar o ambiente Python (.venv). Confira a internet e abra de novo.
+if not "%CODIGO%"=="0" echo ✘ Não consegui criar o ambiente Python (.venv): o uv terminou com o código %CODIGO%. O motivo está na mensagem do uv logo acima. Causas comuns: sem internet para baixar o Python, disco cheio, pasta sem permissão de escrita ou antivírus bloqueando.
 exit /b %CODIGO%
 
 

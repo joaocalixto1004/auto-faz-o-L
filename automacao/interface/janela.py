@@ -21,6 +21,7 @@ import atexit
 import queue
 import sqlite3
 import sys
+import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
@@ -37,7 +38,7 @@ from automacao.interface.aba_contas import AbaContas
 from automacao.interface.aba_planilhas import AbaPlanilhas
 from automacao.interface.componentes import largura_do_texto, quebrar_na_largura
 from automacao.interface.processo import (MODULO_AUTOMACAO, MODULO_LOGIN, Processo, argumentos_automacao,
-                                          argumentos_login, montar_comando, nome_do_alvo)
+                                          argumentos_login, montar_comando, nome_do_alvo, travar_interface)
 from automacao.terminal import preparar_console
 
 TITULO = "Automação das redes sociais"
@@ -47,6 +48,9 @@ ROTULOS_RESUMO = ("Redes", "Contas ativas", "Publicações", "Comentários", "A�
 INTERVALO_LEITURA_MS = 100   # de quanto em quanto tempo a saída do processo é lida
 LINHAS_POR_LEITURA = 500
 MAXIMO_LINHAS_SAIDA = 5000   # linhas mais antigas saem do registro
+LINHAS_MINIMAS_SAIDA = 4     # a saída do processo nunca fica menor que isso (entra no tamanho mínimo)
+ESPERA_LIMPEZA = 15.0        # segundos, no máximo, esperando os restos (Chrome, driver) ao sair
+JA_ABERTA = "A janela da automação já está aberta."
 
 CORES = {"ok": "#1d7a3f", "erro": "#b3261e", "aviso": "#9a6700", "suave": "#5b6472",
          "sistema": "#2f5bea"}
@@ -107,6 +111,9 @@ class AbaInicio(ttk.Frame):
         self.aguardando: str | None = None             # a automação espera para recomeçar a lista
         self.observadores: list[Callable[[], None]] = []
         self._ids_por_nome: dict[str, int] = {}
+        self._contas_ao_vivo: set[int] = set()        # contas que a saída do processo atual já atualizou
+        self._pausas: list[dict] = []                  # pausas por aviso da rede (banco.pausas_ativas)
+        self._texto_pausas = ""
         self._tarefas: dict[str, str] = {}
         self._destruida = False
         self._montar()
@@ -156,6 +163,11 @@ class AbaInicio(ttk.Frame):
                    command=lambda: self.ir_para("configuracoes")).pack(side="left")
         ttk.Button(atalhos, text="Editar planilhas",
                    command=lambda: self.ir_para("planilhas")).pack(side="left", padx=(6, 0))
+        # Pausas por aviso da rede (valem também para as próximas execuções); só aparece se houver.
+        self.rotulo_pausas = quebrar_na_largura(ttk.Label(esquerda, style="Aviso.TLabel", wraplength=300,
+                                                          justify="left"))
+        self.rotulo_pausas.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.rotulo_pausas.grid_remove()
 
         resumo = ttk.LabelFrame(self, text="Configuração atual", padding=10)
         resumo.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
@@ -208,7 +220,8 @@ class AbaInicio(ttk.Frame):
                                                           wraplength=500, justify="left"))
         self.rotulo_estado.grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 4))
         ttk.Button(saida, text="Limpar", command=self.limpar_saida).grid(row=0, column=1, sticky="e", pady=(0, 4))
-        self.texto = tk.Text(saida, height=12, wrap="word", font="TkFixedFont", undo=False,
+        # A altura pedida é a mínima; a saída cresce com a janela (e é ela que encolhe primeiro).
+        self.texto = tk.Text(saida, height=LINHAS_MINIMAS_SAIDA, wrap="word", font="TkFixedFont", undo=False,
                              background="#fbfbfc", foreground="#1d2129", relief="flat",
                              borderwidth=1, highlightthickness=1, highlightcolor="#c5cad3",
                              highlightbackground="#d9dde3", padx=6, pady=4)
@@ -226,19 +239,21 @@ class AbaInicio(ttk.Frame):
     # ------------------------------------------------------------ resumo
 
     def atualizar_resumo(self) -> None:
-        """Relê o banco (contas e configuração) e as planilhas e mostra a situação atual.
+        """Relê o banco (contas, configuração e pausas) e as planilhas e mostra a situação atual.
 
-        Enquanto a verificação de login roda, a situação da conta verificada vem
-        da saída dela (ao vivo) e não é relida do banco.
+        Enquanto o login ou a automação rodam, a situação das contas que eles já
+        mostraram vem da saída deles (ao vivo) e não é relida do banco.
         """
         try:
             with closing(banco.conectar()) as conn:
                 contas = dados.situacao_contas(conn)
                 configuracoes = banco.ler_configuracoes(conn)
+                self._pausas = [dict(pausa) for pausa in banco.pausas_ativas(conn)]
         except sqlite3.Error as erro:
             contas, configuracoes = None, dict(banco.CONFIG_PADRAO)
             self.escrever(f"Erro ao ler o banco de dados: {erro}", "erro")
         self.configuracoes = configuracoes
+        self._mostrar_pausas()
         for rotulo, texto in dados.resumo_configuracao(configuracoes):
             self._rotulos_resumo[rotulo].configure(text=texto)
         self._mostrar_perfis()
@@ -259,11 +274,14 @@ class AbaInicio(ttk.Frame):
         self._definir_contas(contas)
 
     def _definir_contas(self, contas: list[dados.SituacaoConta]) -> None:
-        if self.em_execucao and self.tipo == "login":
-            ao_vivo = dados.achar_conta(self.contas, self.perfil_em_uso)
-            nova = dados.achar_conta(contas, self.perfil_em_uso)
-            if ao_vivo is not None and nova is not None:
-                nova.logins = ao_vivo.logins  # a saída do login vale mais que o banco
+        if self.em_execucao:
+            # A saída do processo (login ou automação) vale mais que o banco para as
+            # contas que ela já atualizou: a automação não grava os logins no banco.
+            for perfil_id in self._contas_ao_vivo:
+                ao_vivo = dados.achar_conta(self.contas, perfil_id)
+                nova = dados.achar_conta(contas, perfil_id)
+                if ao_vivo is not None and nova is not None:
+                    nova.logins = ao_vivo.logins
         self.contas = contas
         if contas and dados.achar_conta(contas, self.perfil_login_id) is None:
             self.perfil_login_id = banco.PERFIL_PRINCIPAL  # a conta escolhida foi removida
@@ -338,10 +356,22 @@ class AbaInicio(ttk.Frame):
         texto = resumo.texto(redes)
         estilo = "TLabel" if resumo.nas_redes(redes) else "Aviso.TLabel"
         if resumo.invalidos:
-            texto += (f"\n{len(resumo.invalidos)} link(s) inválido(s), a automação não inicia assim: "
-                      + ", ".join(resumo.invalidos[:3]))
-            estilo = "Erro.TLabel"
+            # Como a automação faz: ela pula essas linhas (com um aviso) e segue com as outras.
+            texto += "\n" + dados.texto_links_invalidos(resumo.invalidos, mostrar=2)
+            estilo = "Aviso.TLabel"
         rotulo.configure(text=texto, style=estilo)
+
+    def _mostrar_pausas(self) -> None:
+        """Mostra as pausas por aviso da rede que ainda valem (some quando não há nenhuma)."""
+        texto = dados.texto_pausas(self._pausas)
+        if texto == self._texto_pausas:
+            return
+        self._texto_pausas = texto
+        self.rotulo_pausas.configure(text=texto)
+        if texto:
+            self.rotulo_pausas.grid()
+        else:
+            self.rotulo_pausas.grid_remove()
 
     def _mostrar_destinatarios(self, compartilhar_com: str) -> None:
         rotulo = self._rotulos_resumo["Compartilhar com"]
@@ -377,19 +407,30 @@ class AbaInicio(ttk.Frame):
         self.atualizar_resumo()  # vale o que está salvo agora (contas, redes, planilhas)
         resumo = self.resumo_alvos  # None: planilha com erro; a própria automação vai mostrar
         redes = banco.redes_escolhidas(self.configuracoes)
-        if resumo is not None and not resumo.invalidos and not resumo.nas_redes(redes):
+        nome = planilhas.PLANILHA_PERFIS.name
+        if resumo is not None and not resumo.nas_redes(redes):
             if resumo.total:
-                texto = (f"Redes escolhidas nas Configurações: {dados.texto_redes(self.configuracoes)}.\n"
-                         f"Não há perfis dessas redes para visitar em {planilhas.PLANILHA_PERFIS.name}.\n"
-                         "Adicione perfis na aba Planilhas ou troque as redes na aba Configurações.")
+                partes = [f"Redes escolhidas nas Configurações: {dados.texto_redes(self.configuracoes)}.\n"
+                          f"Não há perfis dessas redes para visitar em {nome}."]
+            elif resumo.invalidos:
+                partes = [f"Nenhum link de perfil válido em {nome}: a automação não teria o que visitar."]
             else:
-                texto = (f"Não há perfis para visitar em {planilhas.PLANILHA_PERFIS.name}.\n"
-                         "Adicione os perfis na aba Planilhas.")
-            messagebox.showwarning("Iniciar automação", texto, parent=self)
+                partes = [f"Não há perfis para visitar em {nome}."]
+            if resumo.invalidos:
+                partes.append(dados.texto_links_invalidos(resumo.invalidos)
+                              + ". Use o link do perfil (não o de uma publicação).")
+            partes.append("Adicione ou corrija os perfis na aba Planilhas"
+                          + (" ou troque as redes na aba Configurações." if resumo.total else "."))
+            messagebox.showwarning("Iniciar automação", "\n".join(partes), parent=self)
             return
         if self.contas and not any(conta.ativo for conta in self.contas):
             messagebox.showwarning("Iniciar automação", "Nenhuma conta está ativa.\n"
                                    "Ative pelo menos uma conta na aba Contas.", parent=self)
+            return
+        if resumo is not None and resumo.invalidos and not messagebox.askyesno(
+                "Iniciar automação",
+                f"{dados.texto_links_invalidos(resumo.invalidos)} (a automação pula essas linhas de {nome} "
+                "e visita os outros perfis).\n\nIniciar mesmo assim?", parent=self):
             return
         self._iniciar("automacao", argumentos_automacao(self.var_simular.get(), self.var_trace.get(),
                                                         self.var_verificar.get()))
@@ -409,6 +450,7 @@ class AbaInicio(ttk.Frame):
             return False
         self.processo, self.tipo, self.em_execucao = processo, tipo, True
         self.perfil_em_uso, self.aguardando = perfil_id, None
+        self._contas_ao_vivo = set()
         # Os nomes de agora: se uma conta for renomeada no meio, o que o processo imprime continua valendo.
         self._ids_por_nome = {dados.chave_nome(conta.nome): conta.id for conta in self.contas}
         conta = dados.achar_conta(self.contas, perfil_id)
@@ -416,6 +458,7 @@ class AbaInicio(ttk.Frame):
         self.escrever(f"▶ {titulo}: {' '.join([nome, *argumentos])}", "sistema")
         if tipo == "login" and conta is not None:
             dados.marcar_verificando(conta)
+            self._contas_ao_vivo.add(conta.id)
         self._mostrar_contas()
         self._atualizar_controles()
         return True
@@ -433,49 +476,58 @@ class AbaInicio(ttk.Frame):
         self._atualizar_controles()
 
     def matar_processo(self) -> None:
-        """Mata o processo na hora e espera os restos fecharem (usado ao sair do programa)."""
-        processo = self.processo
-        if processo is None:
-            return
-        if processo.rodando:
-            processo.matar()
-        if processo.parada_pedida:
-            processo.esperar_limpeza(15)  # não sai deixando Chrome órfão
+        """Mata o processo na hora e espera os restos fecharem (bloqueia; usado ao sair do programa)."""
+        if self.processo is not None:
+            _matar_e_esperar(self.processo)
 
     def _ler_saida(self) -> None:
+        """Lê o que chegou da saída do processo: escreve tudo de uma vez e redesenha uma vez só."""
         try:
             processo = self.processo
             if processo is None:
                 return
+            linhas: list[tuple[str, str | None]] = []
+            redesenhar, fim = False, None
             for _ in range(LINHAS_POR_LEITURA):
                 try:
                     tipo, valor = processo.saida.get_nowait()
                 except queue.Empty:
                     break
                 if tipo == "linha":
-                    self._tratar_linha(valor)
-                elif tipo == "fim" and self.em_execucao:
-                    self._processo_terminou(valor)
+                    linhas.append((valor, dados.estilo_da_linha(valor)))
+                    redesenhar |= self._tratar_linha(valor)
+                elif tipo == "fim":
+                    fim = valor
                     break
+            if linhas:
+                self.escrever_varias(linhas)
+            if redesenhar:
+                self._mostrar_contas()
+                self._relogio(reagendar=False)
+            if fim is not None and self.em_execucao and processo is self.processo:
+                self._processo_terminou(fim)
         finally:
             if not self._destruida:
                 self._agendar("leitura", INTERVALO_LEITURA_MS, self._ler_saida)
 
-    def _tratar_linha(self, linha: str) -> None:
-        self.escrever(linha, dados.estilo_da_linha(linha))
+    def _tratar_linha(self, linha: str) -> bool:
+        """Aplica a linha ao estado (conta em uso, logins, espera). True se é preciso redesenhar."""
         espera = dados.espera_recomeco(linha)
         if espera is not None:
             self.aguardando = espera
-            self._relogio(reagendar=False)
-            return
-        if dados.perfil_da_linha(linha) is not None and self.aguardando:
+            return True
+        trocou_de_conta = dados.perfil_da_linha(linha) is not None
+        redesenhar = False
+        if trocou_de_conta and self.aguardando:
             self.aguardando = None  # começou a próxima volta da lista
-            self._relogio(reagendar=False)
+            redesenhar = True
         em_uso, mudou = dados.tratar_linha_de_contas(self.contas, self.perfil_em_uso, linha, self._ids_por_nome)
         if mudou:
+            if not trocou_de_conta and em_uso is not None:
+                self._contas_ao_vivo.add(em_uso)  # a saída atualizou os logins desta conta
             self.perfil_em_uso = em_uso
-            self._mostrar_contas()
-            self._relogio(reagendar=False)
+            redesenhar = True
+        return redesenhar
 
     def _processo_terminou(self, codigo: int) -> None:
         processo = self.processo
@@ -487,8 +539,11 @@ class AbaInicio(ttk.Frame):
             self.escrever(f"■ {nome} terminou ({duracao}).", "sistema")
         else:
             self.escrever(f"■ {nome} terminou com erro (código {codigo}, {duracao}).", "erro")
+        # O "fim" só chega depois que os restos (Chrome, driver) foram encerrados.
+        self.processo = None
         self.em_execucao = False
         self.perfil_em_uso, self.aguardando = None, None
+        self._contas_ao_vivo = set()
         self.atualizar_resumo()
         self._atualizar_controles()
         if self.ao_terminar:
@@ -523,6 +578,7 @@ class AbaInicio(ttk.Frame):
             self.rotulo_estado.configure(text=" · ".join(partes), style="Sistema.TLabel")
         else:
             self.rotulo_estado.configure(text="Nada em execução.", style="Suave.TLabel")
+        self._mostrar_pausas()  # tira as que acabaram
         if reagendar and not self._destruida:
             self._agendar("relogio", 1000, self._relogio)
 
@@ -530,9 +586,19 @@ class AbaInicio(ttk.Frame):
 
     def escrever(self, linha: str, estilo: str | None = None) -> None:
         """Acrescenta uma linha ao registro, rolando junto só se ele já estava no fim."""
+        self.escrever_varias([(linha, estilo)])
+
+    def escrever_varias(self, linhas: list[tuple[str, str | None]]) -> None:
+        """Acrescenta várias linhas (texto, estilo) de uma vez: uma inserção e um corte só."""
+        if not linhas:
+            return
         no_fim = self.texto.yview()[1] >= 0.999
-        self.texto.insert("end", linha + "\n", (estilo,) if estilo else ())
-        excesso = int(self.texto.index("end-1c").split(".")[0]) - MAXIMO_LINHAS_SAIDA
+        partes: list[object] = []
+        for linha, estilo in linhas[-MAXIMO_LINHAS_SAIDA:]:
+            partes += [linha + "\n", (estilo,) if estilo else ()]
+        self.texto.insert("end", *partes)
+        # Cada linha termina em "\n": "end-1c" fica no começo da linha vazia depois da última.
+        excesso = int(self.texto.index("end-1c").split(".")[0]) - 1 - MAXIMO_LINHAS_SAIDA
         if excesso > 0:
             self.texto.delete("1.0", f"{excesso + 1}.0")
         if no_fim:
@@ -557,7 +623,12 @@ class AbaInicio(ttk.Frame):
             except tk.TclError:
                 pass
         self._tarefas.clear()
-        self.matar_processo()
+        processo = self.processo
+        if processo is not None and not processo.esperar_limpeza(0):
+            # Sem travar a janela: uma thread comum (não daemon) mata e espera os restos,
+            # e o Python só sai depois que ela terminar (nada de Chrome órfão).
+            threading.Thread(target=_matar_e_esperar, args=(processo,), name="encerrar-processo",
+                             daemon=False).start()
         super().destroy()
 
 
@@ -572,12 +643,6 @@ class Aplicacao(tk.Tk):
                  script_automacao: str | Path = MODULO_AUTOMACAO) -> None:
         super().__init__(className="automacao")
         self.title(TITULO)
-        # Em telas com zoom (125%, 150%...), as fontes crescem; a janela acompanha.
-        fator = max(1.0, self.winfo_fpixels("1i") / 96.0)
-        largura = min(int(1040 * fator), self.winfo_screenwidth() - 40)
-        altura = min(int(760 * fator), self.winfo_screenheight() - 80)
-        self.geometry(f"{largura}x{altura}")
-        self.minsize(min(int(900 * fator), largura), min(int(640 * fator), altura))
         self.fontes = configurar_estilos(self)
         self._fechando = False
 
@@ -595,12 +660,62 @@ class Aplicacao(tk.Tk):
         self.cadernos.add(self.configuracoes, text="Configurações")
         self.cadernos.add(self.planilhas, text="Planilhas")
         self.cadernos.bind("<<NotebookTabChanged>>", self._ao_trocar_de_aba)
+        self._tamanho_inicial()
+        # As medidas do conteúdo só valem depois que o Tk arruma os widgets (ao ficar ocioso).
+        self._tarefa_tamanho: str | None = self.after_idle(self._ajustar_tamanho_minimo)
 
         self.protocol("WM_DELETE_WINDOW", self.ao_fechar)
         atexit.register(self.inicio.matar_processo)  # rede de segurança se o Python sair de outro jeito
 
+    def _fator_zoom(self) -> float:
+        return max(1.0, self.winfo_fpixels("1i") / 96.0)
+
+    def _tela(self) -> tuple[int, int]:
+        """O espaço que a janela pode ocupar (a tela menos a barra de tarefas)."""
+        return self.winfo_screenwidth() - 40, self.winfo_screenheight() - 80
+
+    def _tamanho_inicial(self) -> None:
+        """Tamanho de partida: em telas com zoom (125%, 150%...), as fontes crescem e a janela acompanha."""
+        fator = self._fator_zoom()
+        tela_largura, tela_altura = self._tela()
+        self._geometria = (min(int(1040 * fator), tela_largura), min(int(760 * fator), tela_altura))
+        self.geometry("{}x{}".format(*self._geometria))
+        self.minsize(min(int(900 * fator), self._geometria[0]), min(int(640 * fator), self._geometria[1]))
+
+    def _ajustar_tamanho_minimo(self) -> None:
+        """Mínimo pelo que o conteúdo pede (roda uma vez, quando o Tk fica ocioso pela primeira vez).
+
+        Com zoom, as fontes crescem mais que as margens (em pixels) e o texto
+        quebra em mais linhas: o mínimo é o maior entre o de sempre (900 x 640,
+        com o zoom) e o que a aba Início pede com a saída do processo em
+        LINHAS_MINIMAS_SAIDA linhas. As outras abas rolam ou encolhem as listas;
+        na largura, valem todas. Nunca maior que a tela.
+        """
+        self._tarefa_tamanho = None
+        try:
+            self.update_idletasks()
+            fator = self._fator_zoom()
+            abas = [self.nametowidget(aba) for aba in self.cadernos.tabs()]
+            sobra = self.winfo_reqheight() - max(aba.winfo_reqheight() for aba in abas)  # abas, margens
+            tela_largura, tela_altura = self._tela()
+            largura_minima = min(max(int(900 * fator), self.winfo_reqwidth()), tela_largura)
+            altura_minima = min(max(int(640 * fator), sobra + self.inicio.winfo_reqheight()), tela_altura)
+            self.minsize(largura_minima, altura_minima)
+            largura, altura = self._geometria
+            if largura < largura_minima or altura < altura_minima:
+                self._geometria = (max(largura, largura_minima), max(altura, altura_minima))
+                self.geometry("{}x{}".format(*self._geometria))
+        except tk.TclError:
+            pass  # a janela fechou antes
+
     def destroy(self) -> None:
         atexit.unregister(self.inicio.matar_processo)
+        if self._tarefa_tamanho is not None:
+            try:
+                self.after_cancel(self._tarefa_tamanho)
+            except tk.TclError:
+                pass
+            self._tarefa_tamanho = None
         super().destroy()  # a AbaInicio mata o processo, se ainda houver um
 
     def ir_para(self, aba: str) -> None:
@@ -665,12 +780,22 @@ class Aplicacao(tk.Tk):
         if not self._confirmar_pendencias(TITULO, "Salvar antes de sair?", "as alterações são descartadas."):
             return
         if self.inicio.em_execucao:
+            # A janela some na hora, mas o programa continua (escondido, sem travar)
+            # até o processo parar e os restos (Chrome, driver) serem encerrados.
             self._fechando = True
             self.title(f"{TITULO} — encerrando…")
+            self.withdraw()
             self.inicio.ao_terminar = self.destroy
             self.inicio.parar()
             return
         self.destroy()
+
+
+def _matar_e_esperar(processo: Processo) -> None:
+    """Mata o processo, se ainda roda, e espera os restos (Chrome, driver) fecharem."""
+    if processo.rodando:
+        processo.matar()
+    processo.esperar_limpeza(ESPERA_LIMPEZA)  # não sai deixando Chrome órfão
 
 
 def _somente_leitura(texto: tk.Text) -> None:
@@ -707,9 +832,37 @@ def _nitidez_no_windows() -> None:
         pass
 
 
+_TRAVA_DA_JANELA = None  # fica aberta até o processo acabar (o sistema solta a trava)
+
+
+def _avisar_que_ja_esta_aberta() -> None:
+    print(JA_ABERTA, flush=True)  # vai para o logs/interface.log dos lançadores
+    try:
+        raiz = tk.Tk()
+    except tk.TclError:
+        return  # sem tela: fica só a mensagem acima
+    try:
+        raiz.withdraw()
+        messagebox.showinfo(TITULO, f"{JA_ABERTA}\n\nProcure-a na barra de tarefas. Se você acabou de "
+                                    "fechá-la, espere alguns segundos (ela termina de fechar o navegador) e "
+                                    "abra de novo.", parent=raiz)
+    finally:
+        raiz.destroy()
+
+
 def main() -> int:
+    global _TRAVA_DA_JANELA
     preparar_console()
     _nitidez_no_windows()
+    # Uma janela por vez: duas abririam o login ou a automação no mesmo perfil do Chrome.
+    try:
+        _TRAVA_DA_JANELA = travar_interface()
+        ja_aberta = _TRAVA_DA_JANELA is None
+    except OSError:
+        ja_aberta = False  # sem como criar a trava (pasta logs/ sem permissão): abre sem ela
+    if ja_aberta:
+        _avisar_que_ja_esta_aberta()
+        return 0
     app = Aplicacao()
     try:
         app.mainloop()

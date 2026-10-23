@@ -5,9 +5,23 @@
 # de Trabalho, apontando para o iniciar.sh desta pasta. Se a pasta do projeto
 # mudar de lugar, rode este script de novo.
 #
-# Uso: ./instalar_atalho.sh   (ou: bash instalar_atalho.sh)
+# O iniciar.sh chama este script sozinho (com --silencioso) quando o ícone do
+# menu falta ou aponta para outra pasta; rodar à mão serve para recriar o ícone.
+#
+# Uso: ./instalar_atalho.sh [--silencioso]   (ou: bash instalar_atalho.sh)
+#   --silencioso   não mostra o que foi criado (os erros continuam aparecendo)
 
 set -uo pipefail
+
+SILENCIOSO=0
+case "${1:-}" in
+    "") ;;
+    --silencioso) SILENCIOSO=1 ;;
+    -h | --help | --ajuda) echo "Uso: ./instalar_atalho.sh [--silencioso]"; exit 0 ;;
+    *) echo "Opção desconhecida: $1 (use: ./instalar_atalho.sh [--silencioso])" >&2; exit 2 ;;
+esac
+
+informar() { [ "$SILENCIOSO" -eq 1 ] || printf '%s\n' "$*"; }
 
 RAIZ=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd -P) || exit 1
 LANCADOR="$RAIZ/iniciar.sh"
@@ -53,7 +67,7 @@ instalar() {  # instalar <pasta>: grava o atalho e o marca como confiável
     if command -v gio >/dev/null 2>&1; then
         gio set "$destino" metadata::trusted true 2>/dev/null || true
     fi
-    echo "✔ Atalho criado: $destino"
+    informar "✔ Atalho criado: $destino"
 }
 
 instalar "$PASTA_MENU" || { echo "✘ Não consegui gravar em $PASTA_MENU." >&2; exit 1; }
@@ -70,6 +84,6 @@ if [ "$AREA_DE_TRABALHO" != "$HOME" ] && [ -d "$AREA_DE_TRABALHO" ]; then
     instalar "$AREA_DE_TRABALHO" || echo "Aviso: não consegui criar o ícone em $AREA_DE_TRABALHO." >&2
 fi
 
-echo
-echo "Procure \"Automação das redes sociais\" no menu de aplicativos ou use o ícone da Área de Trabalho."
-echo "Se o ícone da Área de Trabalho não abrir, clique nele com o botão direito e escolha \"Permitir execução\"."
+informar ""
+informar "Procure \"Automação das redes sociais\" no menu de aplicativos ou use o ícone da Área de Trabalho."
+informar "Se o ícone da Área de Trabalho não abrir, clique nele com o botão direito e escolha \"Permitir execução\"."

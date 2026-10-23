@@ -5,8 +5,8 @@ Cada teste é isolado por segurança:
 - o banco padrão (banco.CAMINHO_BANCO) aponta para um arquivo temporário,
   então nada encosta no automacao.db real, nem por engano;
 - as pastas de capturas, traces e dos perfis do navegador (perfil_navegador/
-  e perfis/), as planilhas de data/ e o log e o marcador da instalação
-  apontam para tmp_path;
+  e perfis/), as planilhas de data/, o log e o marcador da instalação e as
+  travas (da automação e de "uma janela por vez") apontam para tmp_path;
 - qualquer tentativa de abrir o Playwright ou o navegador falha na hora, e a
   instalação não roda comandos de verdade (uv, playwright install).
 """
@@ -14,6 +14,7 @@ Cada teste é isolado por segurança:
 import pytest
 
 from automacao import abrir_redes, banco, instalacao, interagir, planilhas
+from automacao.interface import processo as processo_interface
 from automacao.redes import comum
 
 
@@ -32,6 +33,7 @@ def isolamento(tmp_path, monkeypatch):
     monkeypatch.setattr(comum, "PASTA_CAPTURAS", tmp_path / "capturas")
     monkeypatch.setattr(interagir, "PASTA_TRACES", tmp_path / "traces")
     monkeypatch.setattr(interagir, "TRAVA_AUTOMACAO", tmp_path / "automacao.trava")
+    monkeypatch.setattr(processo_interface, "TRAVA_INTERFACE", tmp_path / "interface.trava")
     monkeypatch.setattr(abrir_redes, "PASTA_PERFIL", tmp_path / "perfil_falso")
     # Pastas das contas (perfis do navegador): a interface pode apagar a de uma
     # conta removida, então a raiz e perfis/ também apontam para tmp_path.

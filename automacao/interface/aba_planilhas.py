@@ -1,11 +1,11 @@
 """Aba "Planilhas" da interface: edita data/para_acessar.xlsx e data/para_compartilhar.xlsx.
 
 Cada planilha tem as abas instagram e tiktok, mostradas lado a lado. Dá para
-adicionar (vários de uma vez, separados por espaço, vírgula ou linha), remover
-e salvar. O arquivo só muda ao clicar em "Salvar planilha".
+adicionar vários de uma vez (links separados por espaço ou linha; usuários
+também por vírgula), remover e salvar. O arquivo só muda ao clicar em "Salvar
+planilha".
 """
 
-import re
 import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,6 +29,7 @@ class TipoPlanilha:
     dica: str
     validar_novo: Callable[[str, str, list[str]], tuple[str | None, str | None]]
     observar: Callable[[str, str, list[str]], str]
+    separar: Callable[[str], list[str]]   # o texto colado no campo, um item por vez
 
 
 PERFIS = TipoPlanilha(
@@ -41,6 +42,7 @@ PERFIS = TipoPlanilha(
          "https://www.instagram.com/usuario/ ou https://www.tiktok.com/@usuario.",
     validar_novo=dados.validar_novo_perfil,
     observar=dados.observacao_perfil,
+    separar=dados.separar_links,  # vírgula pode estar dentro do link (?a=1,2)
 )
 
 DESTINATARIOS = TipoPlanilha(
@@ -53,6 +55,7 @@ DESTINATARIOS = TipoPlanilha(
          "o @ é opcional e não é gravado.",
     validar_novo=lambda texto, aba, existentes: dados.validar_novo_destinatario(texto, existentes),
     observar=lambda texto, aba, anteriores: dados.observacao_destinatario(texto, anteriores),
+    separar=dados.separar_usuarios,
 )
 
 
@@ -61,6 +64,17 @@ def caminho_para_mostrar(caminho: Path) -> str:
         return str(caminho.resolve().relative_to(RAIZ))
     except ValueError:
         return str(caminho)
+
+
+def explicar_erro_ao_salvar(caminho: Path, erro: Exception) -> str:
+    """O motivo de uma planilha não ter sido salva, para o usuário."""
+    nome = caminho_para_mostrar(caminho)
+    if isinstance(erro, PermissionError):
+        # No Windows, é o que acontece com a planilha aberta no Excel.
+        return (f"{nome} está aberta em outro programa (Excel ou LibreOffice) ou sem permissão de "
+                "gravação: feche o arquivo no Excel e tente de novo.")
+    return (f"Não consegui salvar {nome}: {erro}\nSe a planilha estiver aberta no Excel ou no "
+            "LibreOffice, feche o arquivo e tente de novo.")
 
 
 class ListaAba(ttk.LabelFrame):
@@ -85,7 +99,7 @@ class ListaAba(ttk.LabelFrame):
         # Larguras iniciais que cabem lado a lado na janela de 900 px; o link estica com a janela.
         self.arvore.column("valor", width=largura_do_texto(self, "https://www.instagram.com/"),
                            minwidth=80, stretch=True)
-        self.arvore.column("obs", width=largura_do_texto(self, "inválido: impede o início"), stretch=False)
+        self.arvore.column("obs", width=largura_do_texto(self, dados.OBSERVACAO_INVALIDO), stretch=False)
         self.arvore.tag_configure("aviso", foreground="#9a6700")
         self.arvore.grid(row=0, column=0, columnspan=2, sticky="nsew")
         barra = ttk.Scrollbar(self, orient="vertical", command=self.arvore.yview)
@@ -112,8 +126,8 @@ class ListaAba(ttk.LabelFrame):
         self._redesenhar()
 
     def adicionar(self) -> None:
-        """Adiciona o que foi digitado (aceita vários, separados por espaço, vírgula ou linha)."""
-        partes = [p for p in re.split(r"[\s,;]+", self.var_novo.get()) if p]
+        """Adiciona o que foi digitado ou colado (aceita vários de uma vez; veja TipoPlanilha.separar)."""
+        partes = self.tipo.separar(self.var_novo.get())
         if not partes:
             self.rotulo_erro.configure(text="Digite o que quer adicionar.")
             return
@@ -161,6 +175,7 @@ class PainelPlanilha(ttk.Frame):
         self.ao_salvar = ao_salvar
         self._salvos: dict[str, list[str]] = {}
         self._modificado_em: float | None = None
+        self.erro_ao_salvar: str | None = None  # por que o último salvar falhou (None: não falhou)
 
         self.columnconfigure((0, 1), weight=1, uniform="abas")
         self.rowconfigure(2, weight=1)
@@ -229,9 +244,14 @@ class PainelPlanilha(ttk.Frame):
     def tem_alteracoes(self) -> bool:
         return self.dados() != self._salvos
 
-    def salvar(self) -> bool:
-        """Grava as duas abas na planilha. Devolve True se salvou."""
+    def salvar(self, mostrar_erro: bool = True) -> bool:
+        """Grava as duas abas na planilha. Devolve True se salvou.
+
+        Se falhar, o motivo fica em `erro_ao_salvar` (e aparece numa caixa de
+        mensagem, a não ser com `mostrar_erro=False`).
+        """
         caminho = self.caminho
+        self.erro_ao_salvar = None
         if self._data_do_arquivo() != self._modificado_em and not messagebox.askyesno(
                 self.tipo.titulo,
                 f"{caminho_para_mostrar(caminho)} foi alterada fora do programa depois que foi carregada.\n"
@@ -240,11 +260,10 @@ class PainelPlanilha(ttk.Frame):
         try:
             self.tipo.salvar(self.dados(), caminho)
         except Exception as erro:  # noqa: BLE001 - mostra o problema em vez de fechar
-            messagebox.showerror(
-                self.tipo.titulo,
-                f"Não consegui salvar {caminho_para_mostrar(caminho)}:\n{erro}\n\n"
-                "Se a planilha estiver aberta no Excel ou no LibreOffice, feche e tente de novo.",
-                parent=self)
+            self.erro_ao_salvar = explicar_erro_ao_salvar(caminho, erro)
+            self.rotulo_estado.configure(text="Não foi salva (alterações pendentes).", style="Erro.TLabel")
+            if mostrar_erro:
+                messagebox.showerror(self.tipo.titulo, self.erro_ao_salvar, parent=self)
             return False
         self.carregar()
         self.rotulo_estado.configure(text=f"Planilha salva às {datetime.now():%H:%M:%S}.", style="Ok.TLabel")
@@ -285,5 +304,25 @@ class AbaPlanilhas(ttk.Frame):
         return any(painel.tem_alteracoes() for painel in self.paineis)
 
     def salvar(self) -> bool:
-        """Salva as planilhas com alterações. True se todas foram salvas."""
-        return all(painel.salvar() for painel in self.paineis if painel.tem_alteracoes())
+        """Salva todas as planilhas com alterações. True se todas foram salvas.
+
+        Uma que falhe (ex.: aberta no Excel) não impede a outra de ser salva; no
+        fim, uma mensagem só diz qual não foi salva e por quê.
+        """
+        salvas, falhas, tudo_salvo = [], [], True
+        for painel in self.paineis:
+            if not painel.tem_alteracoes():
+                continue
+            if painel.salvar(mostrar_erro=False):
+                salvas.append(painel)
+                continue
+            tudo_salvo = False
+            if painel.erro_ao_salvar:
+                falhas.append(painel)
+        if falhas:
+            self.cadernos.select(falhas[0])
+            texto = "\n\n".join(f"• {painel.tipo.titulo}: {painel.erro_ao_salvar}" for painel in falhas)
+            if salvas:
+                texto += "\n\n" + " e ".join(painel.tipo.titulo for painel in salvas) + ": salva."
+            messagebox.showerror("Planilha não salva", texto, parent=self)
+        return tudo_salvo
