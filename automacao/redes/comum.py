@@ -127,6 +127,7 @@ class _EstadoDaLinha(threading.local):
     """
     ao_clicar: Callable[[], None] | None = None   # grava o "nao_confirmado" da ação em curso
     ultimo_comentario: str | None = None
+    ritmo: float = 1.0                             # mais atento (<1) ou mais lento (>1); muda aos poucos
     textos_evitar: frozenset[str] = frozenset()    # comentados recentemente pela conta (anti-bloqueio)
 
 
@@ -155,9 +156,44 @@ Acao = Callable[[Page, Config, Publicacao], Resultado]
 
 # ------------------------------------------------------------ ritmo humano
 
+# Os tempos vêm da aleatoriedade do sistema operacional (a sequência não dá
+# para prever nem repetir) e têm o jeito de uma pessoa: a maioria perto do
+# começo do intervalo, às vezes uma demora maior (uma distração) e um ritmo
+# que muda aos poucos, ora mais atento, ora mais lento. Cada linha de execução
+# (cada rede, no modo paralelo) tem o seu ritmo.
+_acaso = random.SystemRandom()
+CHANCE_DISTRACAO = 0.07              # de vez em quando, a pessoa olha para outra coisa
+RITMO_LIMITES = (0.8, 1.35)          # até onde o ritmo pode ir, para mais rápido ou mais lento
+CHANCE_PENSAR_ENTRE_PALAVRAS = 0.15  # na digitação, uma parada depois do espaço ou da pontuação
+
+
+def tempo_humano(minimo: float, maximo: float) -> float:
+    """Um tempo (s) que nunca fica abaixo de `minimo`; quase sempre até `maximo`.
+
+    Distribuição beta(2, 3) no intervalo (mais perto do começo, sem ser fixo),
+    multiplicada pelo ritmo do momento (que anda aos poucos, em passeio
+    aleatório) e, com chance CHANCE_DISTRACAO, mais uma demora. Nunca passa
+    de `maximo` mais o tamanho do intervalo.
+    """
+    if maximo <= minimo:
+        return max(minimo, 0.0)
+    _linha.ritmo = min(max(_linha.ritmo * _acaso.lognormvariate(0, 0.08), RITMO_LIMITES[0]), RITMO_LIMITES[1])
+    faixa = maximo - minimo
+    tempo = minimo + faixa * _acaso.betavariate(2.0, 3.0) * _linha.ritmo
+    if _acaso.random() < CHANCE_DISTRACAO:
+        tempo += faixa * _acaso.uniform(0.3, 1.0)
+    return min(max(tempo, minimo), maximo + faixa)
+
+
 def pausa(intervalo: tuple[float, float] = PAUSA_ENTRE_ACOES) -> None:
-    """Espera um tempo aleatório dentro do intervalo."""
-    dormir(random.uniform(*intervalo))
+    """Espera um tempo de pessoa dentro do intervalo (veja tempo_humano)."""
+    dormir(tempo_humano(*intervalo))
+
+
+def esperar_um_pouco(pg: Page, minimo_ms: int, maximo_ms: int | None = None) -> None:
+    """Espera na página pelo menos `minimo_ms` (o que a página precisa), com a oscilação de uma pessoa."""
+    maximo_ms = maximo_ms if maximo_ms is not None else int(minimo_ms * 1.6)
+    pg.wait_for_timeout(int(tempo_humano(minimo_ms / 1000, maximo_ms / 1000) * 1000))
 
 
 def clicar(pg: Page, alvo: Locator, timeout: int = 10_000,
@@ -180,7 +216,7 @@ def clicar(pg: Page, alvo: Locator, timeout: int = 10_000,
     rx = caixa["width"] * random.uniform(0.35, 0.65)
     ry = caixa["height"] * random.uniform(0.35, 0.65)
     pg.mouse.move(caixa["x"] + rx, caixa["y"] + ry, steps=random.randint(12, 28))
-    time.sleep(random.uniform(0.2, 0.7))
+    time.sleep(tempo_humano(0.2, 0.7))  # o mouse para no botão e a pessoa hesita um instante
     if conferir_antes:
         conferir_antes()
     alvo.click(position={"x": rx, "y": ry}, delay=random.randint(50, 120), timeout=timeout)
@@ -225,8 +261,10 @@ def digitar(pg: Page, texto: str) -> None:
             pg.keyboard.insert_text(parte)
         else:
             pg.keyboard.type(parte)
-        time.sleep(random.uniform(*DIGITACAO_POR_LETRA))
-    time.sleep(random.uniform(0.4, 1.0))
+        time.sleep(tempo_humano(*DIGITACAO_POR_LETRA))
+        if parte in " ,.!?" and _acaso.random() < CHANCE_PENSAR_ENTRE_PALAVRAS:
+            time.sleep(tempo_humano(0.3, 1.1))   # parou para pensar na próxima palavra
+    time.sleep(tempo_humano(0.4, 1.0))
 
 
 def rolar(pg: Page, passos: tuple[int, int] = (3, 6)) -> None:
@@ -236,7 +274,7 @@ def rolar(pg: Page, passos: tuple[int, int] = (3, 6)) -> None:
                   steps=random.randint(5, 12))
     for _ in range(random.randint(*passos)):
         pg.mouse.wheel(0, random.randint(250, 600))
-        time.sleep(random.uniform(0.3, 0.9))
+        time.sleep(tempo_humano(0.3, 0.9))
 
 
 def esperar_ate(condicao: Callable[[], bool], timeout_s: float, intervalo: float = 0.4) -> bool:

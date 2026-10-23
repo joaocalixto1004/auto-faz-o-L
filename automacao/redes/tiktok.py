@@ -18,7 +18,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from automacao.redes.comum import (Acao, Bloqueio,
                                    Config, LinhaResumo, NaoConfirmado, Publicacao, Resultado,
-                                   antes_de_clicar, clicar, coletar_da_grade, digitar, esperar_ate,
+                                   antes_de_clicar, clicar, coletar_da_grade, digitar, esperar_ate, esperar_um_pouco,
                                    ler_clipboard, pausa, preparar_copia, processar_publicacao, rolar,
                                    sortear_comentario, tem_video_visivel)
 
@@ -82,7 +82,7 @@ def esperar_captcha(pg: Page) -> None:
 def abrir_aba(pg: Page, perfil: str, tab: str, item: str) -> bool:
     """Abre o perfil na aba pedida. False se o perfil não tiver essa aba."""
     pg.goto(f"{BASE}/@{perfil}", wait_until="domcontentloaded")
-    pg.wait_for_timeout(2000)
+    esperar_um_pouco(pg, 2000)
     esperar_captcha(pg)
     pg.locator('[data-e2e="videos-tab"]').first.wait_for(state="visible", timeout=20_000)
     try:
@@ -126,9 +126,9 @@ def abrir_publicacao(pg: Page, pub: Publicacao, tab: str, item: str) -> None:
             if pg.locator(seletor).count():
                 break
             rolar(pg)
-            pg.wait_for_timeout(1200)
+            esperar_um_pouco(pg, 1200)
     clicar(pg, pg.locator(seletor).first, timeout=15_000)
-    pg.wait_for_timeout(1500)
+    esperar_um_pouco(pg, 1500)
     esperar_captcha(pg)
     pg.locator(BOTAO_CURTIR).first.wait_for(state="visible", timeout=20_000)
 
@@ -171,7 +171,7 @@ def fechar_publicacao(pg: Page) -> None:
     fechar = pg.locator('[data-e2e="browse-close"]').first
     if fechar.is_visible():
         clicar(pg, fechar)
-        pg.wait_for_timeout(1500)
+        esperar_um_pouco(pg, 1500)
 
 
 # Posts de fotos do TikTok são um carrossel (Swiper) com setas pequenas dos
@@ -215,7 +215,7 @@ def ver_midia(pg: Page, cfg: Config, pub: Publicacao) -> str:
         pg.mouse.move(x, y, steps=random.randint(10, 22))
         pg.mouse.click(x, y, delay=random.randint(50, 150))
         cliques += 1
-        pg.wait_for_timeout(800)
+        esperar_um_pouco(pg, 800)
         info = pg.evaluate(JS_CARROSSEL)
         vistos.add(info["atual"] if info and info["atual"] is not None else len(vistos))
     pausa(cfg.protecao.pausa_item_carrossel)
@@ -268,14 +268,14 @@ def voltar_ao_topo_do_painel(pg: Page) -> None:
         botao = pg.get_by_text(re.compile(r"^(Voltar para o topo|Back to top)$", re.I))
     if botao.count() and botao.first.is_visible():
         clicar(pg, botao.first)
-        pg.wait_for_timeout(900)
+        esperar_um_pouco(pg, 900)
         return
     caixa = pg.evaluate(JS_CAIXA_COMENTARIOS)
     if caixa:
         pg.mouse.move(caixa["x"], caixa["y"], steps=random.randint(6, 14))
         for _ in range(6):
             pg.mouse.wheel(0, -random.randint(1500, 2500))
-            pg.wait_for_timeout(random.randint(250, 500))
+            esperar_um_pouco(pg, 250, 500)
 
 
 def ja_comentei(pg: Page, usuario: str, rodadas: int = 8) -> bool:
@@ -300,7 +300,7 @@ def _procurar_meu_comentario(pg: Page, usuario: str, rodadas: int) -> bool:
             return False
         pg.mouse.move(caixa["x"], caixa["y"], steps=random.randint(6, 14))
         pg.mouse.wheel(0, random.randint(500, 900))
-        pg.wait_for_timeout(random.randint(900, 1600))
+        esperar_um_pouco(pg, 900, 1600)
     return pg.locator(seletor).count() > 0
 
 
@@ -477,7 +477,7 @@ def _botao_seguir(pg: Page):
 
 def abrir_perfil(pg: Page, perfil: str) -> None:
     pg.goto(f"{BASE}/@{perfil}", wait_until="domcontentloaded")
-    pg.wait_for_timeout(2000)
+    esperar_um_pouco(pg, 2000)
     esperar_captcha(pg)
     pg.locator('[data-e2e="videos-tab"]').first.wait_for(state="visible", timeout=20_000)
 

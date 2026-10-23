@@ -20,7 +20,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from automacao import banco
 from automacao.redes.comum import (Acao, Bloqueio, Config, LinhaResumo,
                                    NaoConfirmado, Publicacao, Resultado, antes_de_clicar, clicar,
-                                   coletar_da_grade, digitar, esperar_ate, ler_clipboard, monitorar_video,
+                                   coletar_da_grade, digitar, esperar_ate, esperar_um_pouco, ler_clipboard,
+                                   monitorar_video,
                                    pausa, preparar_copia, processar_publicacao, rolar, sortear_comentario,
                                    tem_video_visivel, ver_item)
 from automacao.redes.protecao import PularAcao, controlar_ritmo
@@ -117,7 +118,7 @@ def fechar_janelas(pg: Page) -> None:
         else:
             pg.keyboard.press("Escape")
             pg.mouse.click(10, 10)
-        pg.wait_for_timeout(700)
+        esperar_um_pouco(pg, 700)
 
 
 # ---------------------------------------------------------------- navegação
@@ -132,7 +133,7 @@ def listar_publicacoes(pg: Page, cfg: Config, perfil: str, aba: str, sufixo: str
     if sufixo and sufixo.rstrip("/") not in pg.url:
         return None  # o Instagram redirecionou: o perfil não tem essa aba
     meu_usuario(pg)
-    pg.wait_for_timeout(1500)  # deixa a grade terminar de montar
+    esperar_um_pouco(pg, 1500)  # deixa a grade terminar de montar
 
     def ler_hrefs() -> list[str]:
         return pg.eval_on_selector_all(SEL_LINK_POST, "els => els.map(e => e.getAttribute('href'))")
@@ -172,7 +173,7 @@ def ver_midia(pg: Page, cfg: Config, pub: Publicacao) -> str:
             break
         clicar(pg, avancar)
         itens += 1
-        pg.wait_for_timeout(700)
+        esperar_um_pouco(pg, 700)
     return f"carrossel com {itens} itens, visto até o fim"
 
 
@@ -232,7 +233,7 @@ def meus_reposts(pg: Page) -> set[str]:
                     hrefs = pg.eval_on_selector_all(SEL_LINK_POST, "els => els.map(e => e.getAttribute('href'))")
                     _meus_reposts.update(m.group(1) for h in hrefs if (m := RE_CODIGO.search(h or "")))
                     rolar(pg)
-                    pg.wait_for_timeout(1200)
+                    esperar_um_pouco(pg, 1200)
             except PlaywrightTimeout:
                 pass
             pg.goto(atual, wait_until="domcontentloaded")
@@ -316,7 +317,7 @@ def ja_comentei(pg: Page, usuario: str, rodadas: int = 8) -> bool:
                 return False
             pg.mouse.move(caixa["x"], caixa["y"], steps=random.randint(6, 14))
             pg.mouse.wheel(0, random.randint(500, 900))
-        pg.wait_for_timeout(random.randint(900, 1600))
+        esperar_um_pouco(pg, 900, 1600)
     return bool(pg.evaluate(JS_MEUS_COMENTARIOS, usuario))
 
 

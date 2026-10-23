@@ -191,8 +191,12 @@ Regras de segurança:
   bloqueada), aquela conta para de agir naquela rede e fica **em pausa por 24 horas** (48 horas
   com a proteção anti-bloqueio), mesmo que você inicie a automação de novo. No TikTok, se
   aparecer um captcha, ele espera até 5 minutos você resolver na janela.
-- **Ritmo de pessoa**: o mouse anda até cada botão, o texto é digitado letra a letra, há pausas
-  aleatórias, os vídeos são assistidos até o fim, os carrosséis são passados até a última foto e
+- **Ritmo de pessoa**: o mouse anda até cada botão e hesita um instante antes de clicar, o texto
+  é digitado letra a letra (com paradas de vez em quando entre as palavras) e as pausas oscilam
+  sem padrão: o sorteio usa a aleatoriedade do sistema (não dá para prever nem repetir), a
+  maioria fica perto do começo do intervalo, às vezes vem uma demora maior (como uma distração)
+  e o ritmo muda aos poucos, ora mais rápido, ora mais lento, separado para cada rede. Os vídeos
+  são assistidos até o fim, os carrosséis são passados até a última foto e
   as fotos são olhadas com calma. Isso reduz o risco, mas **não garante** que a rede não bloqueie
   a conta: os termos de uso do Instagram e do TikTok proíbem automação em qualquer ritmo.
 
@@ -356,7 +360,10 @@ execução dos `.sh`) e se o `requirements.txt` está igual ao `pyproject.toml`.
   de esperar. Os modos são `PROTECAO_NORMAL`, `PROTECAO_ANTI_BLOQUEIO` e `PROTECAO_BOOST`
   (`sem_tetos`); `protecao_da_config` aplica os tetos escolhidos na interface (configuração
   `tetos`, em JSON, conferida por `validar_tetos`). Um aviso da rede vira uma linha na tabela
-  `pausas`, conferida no início de cada perfil.
+  `pausas`, conferida no início de cada perfil. Todos os tempos curtos (pausas, hesitação antes do
+  clique, digitação, esperas na página) passam por `comum.tempo_humano`: beta(2, 3) no intervalo,
+  vezes um ritmo em passeio aleatório por linha de execução (`comum._linha.ritmo`), mais uma
+  distração ocasional, com `random.SystemRandom`; nunca abaixo do mínimo pedido.
 - **Banco.** SQLite em modo WAL. Para mudar o esquema, **acrescente** um item no fim de
   `banco.MIGRACOES`; nunca altere nem reordene os existentes (o banco aplica as que faltam pelo
   `PRAGMA user_version`).
