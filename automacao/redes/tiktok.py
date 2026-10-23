@@ -335,9 +335,18 @@ def comentar(pg: Page, cfg: Config, pub: Publicacao) -> Resultado:
     return Resultado("feito", f"{texto}{extra}")
 
 
+RE_RGB = re.compile(r"rgba?\(\s*(\d+(?:\.\d+)?)[\s,]+(\d+(?:\.\d+)?)[\s,]+(\d+(?:\.\d+)?)\s*[,/)]")
+
+
+def _rgb(cor: str) -> tuple[float, float, float] | None:
+    """(r, g, b) de uma cor "rgb(...)"/"rgba(...)"; None para qualquer outro formato."""
+    achou = RE_RGB.match(cor.strip())
+    return tuple(float(n) for n in achou.groups()) if achou else None
+
+
 def _amarelo(cor: str) -> bool:
-    numeros = [int(n) for n in re.findall(r"\d+", cor)[:3]]
-    return len(numeros) == 3 and numeros[0] > 200 and numeros[1] > 150 and numeros[2] < 120
+    rgb = _rgb(cor)
+    return rgb is not None and rgb[0] > 200 and rgb[1] > 150 and rgb[2] < 120
 
 
 def _cores_favorito(pg: Page) -> list[str]:
@@ -346,16 +355,22 @@ def _cores_favorito(pg: Page) -> list[str]:
 
 
 def _favoritado(pg: Page) -> bool | None:
-    """True/False pelo ícone; None se o ícone não estiver na tela.
+    """True/False pelo ícone; None se o ícone não estiver na tela ou se uma cor não der para ler.
 
     Nos favoritos, um dos traços do ícone fica amarelo (#FACE15); fora dele,
     todos usam a cor do texto. A cor do ícone em si não serve: ela muda com o
-    mouse em cima.
+    mouse em cima. Só diz "não favoritado" depois de ler a cor de todos os
+    traços (os sem preenchimento não contam): um formato desconhecido
+    (gradiente, color(), oklch...) poderia esconder o amarelo, e clicar
+    desfaria o favorito.
     """
     cores = _cores_favorito(pg)
-    if not cores:
+    if any(_amarelo(cor) for cor in cores):
+        return True
+    pintadas = [cor for cor in cores if cor.strip() != "none"]
+    if not pintadas or any(_rgb(cor) is None for cor in pintadas):
         return None
-    return any(_amarelo(cor) for cor in cores)
+    return False
 
 
 def favoritar(pg: Page, cfg: Config, pub: Publicacao) -> Resultado:
@@ -363,7 +378,8 @@ def favoritar(pg: Page, cfg: Config, pub: Publicacao) -> Resultado:
     if estado is True:
         return Resultado("ja_estava_feito", "o vídeo já estava nos favoritos")
     if estado is None:
-        raise RuntimeError("não encontrei o ícone de favoritos; não cliquei para não desfazer um favorito")
+        raise RuntimeError(f"não consegui ler o ícone de favoritos (cores: {_cores_favorito(pg)}); "
+                           "não cliquei para não desfazer um favorito")
     if cfg.simular:
         return Resultado("simulado", f"cores do ícone: {_cores_favorito(pg)}")
     def ainda_nao_favoritado() -> None:
