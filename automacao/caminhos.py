@@ -24,6 +24,7 @@ PLANILHA_DESTINATARIOS = PASTA_DADOS / "para_compartilhar.xlsx"
 PASTA_CAPTURAS = RAIZ / "capturas"             # print da tela quando uma ação falha
 PASTA_TRACES = RAIZ / "traces"                 # traces do Playwright (opção --trace)
 PASTA_LOGS = RAIZ / "logs"
+PASTA_EMOJIS = RAIZ / "automacao" / "interface" / "emojis"  # imagens da paleta de emojis (versionadas)
 LOG_INSTALACAO = PASTA_LOGS / "instalacao.log"
 TRAVA_AUTOMACAO = PASTA_LOGS / "automacao.trava"   # uma automação por vez
 

@@ -68,7 +68,7 @@ def relogio(monkeypatch):
     monkeypatch.setattr(comum, "time", relogio)
     monkeypatch.setattr(comum, "random", SimpleNamespace(uniform=lambda a, b: (a + b) / 2,
                                                          randint=lambda a, b: a))
-    monkeypatch.setattr(comum, "_ao_clicar", None)
+    monkeypatch.setattr(comum._linha, "ao_clicar", None)
     for nome in ("pausa", "monitorar_video", "esperar_fim_do_video", "capturar_tela", "controlar_ritmo"):
         monkeypatch.setattr(comum, nome, _sem_efeito)
     for nome in ("pausa", "monitorar_video", "controlar_ritmo"):
@@ -676,7 +676,7 @@ def test_clicar_sem_elemento_visivel_nao_reconfere_nem_clica(relogio):
 def test_antes_de_clicar_so_chama_o_gancho_quando_ha_um(monkeypatch):
     comum.antes_de_clicar()   # sem gancho (fora do motor ou no modo simular): não faz nada
     chamadas = []
-    monkeypatch.setattr(comum, "_ao_clicar", lambda: chamadas.append("marca"))
+    monkeypatch.setattr(comum._linha, "ao_clicar", lambda: chamadas.append("marca"))
     comum.antes_de_clicar()
     assert chamadas == ["marca"]
 
@@ -695,7 +695,7 @@ def test_ja_feito_devolve_ja_estava_feito_sem_clicar(caso, relogio):
 @pytest.mark.parametrize("caso", CASOS, ids=IDS)
 def test_pendente_clica_uma_vez_depois_da_marca_e_confirma(caso, relogio, monkeypatch):
     pg = caso.montar(relogio, "pendente")
-    monkeypatch.setattr(comum, "_ao_clicar", lambda: pg.eventos.append("marca"))
+    monkeypatch.setattr(comum._linha, "ao_clicar", lambda: pg.eventos.append("marca"))
     resultado = caso.acao(pg, config(), caso.pub)
     assert resultado.status == "feito"
     assert pg.cliques == [caso.alvo]
@@ -707,7 +707,7 @@ def test_pendente_clica_uma_vez_depois_da_marca_e_confirma(caso, relogio, monkey
 @pytest.mark.parametrize("caso", CASOS, ids=IDS)
 def test_estado_desconhecido_levanta_sem_clicar_nem_marcar(caso, relogio, monkeypatch):
     pg = caso.montar(relogio, "desconhecido")
-    monkeypatch.setattr(comum, "_ao_clicar", lambda: pg.eventos.append("marca"))
+    monkeypatch.setattr(comum._linha, "ao_clicar", lambda: pg.eventos.append("marca"))
     with pytest.raises(caso.erro_desconhecido):
         caso.acao(pg, config(), caso.pub)
     assert pg.cliques == []

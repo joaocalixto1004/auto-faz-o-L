@@ -262,7 +262,7 @@ def test_formulario_da_aba_salva_e_aparece_no_resumo(conn):
     banco.salvar_configuracoes(conn, valores)
     resumo = dict(dados.resumo_configuracao(banco.ler_configuracoes(conn)))
     assert resumo["Redes"] == "só TikTok"
-    assert resumo["Proteção anti-bloqueio"] == "ligada"
+    assert resumo["Proteção"] == "anti-bloqueio (lento e cauteloso)"
     assert resumo["Ações extras"] == ("Seguir: não · Stories: sim · Recomeçar: 30 min após terminar · "
                                       "Conta sem login: pula")
 

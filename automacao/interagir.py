@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interage com as publicações de perfis do Instagram e do TikTok.
 
-Instagram, nas abas Posts e Reposts: curtir, repostar, comentar, compartilhar
+Instagram, nas abas Posts, Reels e Reposts: curtir, repostar, comentar, compartilhar
 por mensagem e copiar o link (pelo menu "...").
 TikTok, nas abas Vídeos e Republicações: curtir, comentar, adicionar aos
 favoritos, compartilhar por mensagem e copiar o link.
@@ -14,6 +14,11 @@ De onde vêm os dados:
 - Limite (N primeiras publicações ou últimas X semanas), comentários e limite
   diário: aba Configurações da interface (ou a página antiga do
   configuracao.py), salvos no banco. As opções abaixo têm prioridade.
+
+Com as duas redes escolhidas, o Instagram e o TikTok agem ao mesmo tempo, cada
+um na sua janela do mesmo Chrome (veja processar_em_paralelo e
+docs/adr/0002-redes-em-paralelo.md); --uma-rede-por-vez volta ao jeito antigo.
+O ritmo e os tetos vêm de redes/protecao.py (normal, anti-bloqueio ou boost).
 
 Curtir, repostar e favoritar só são clicados quando a página mostra que ainda
 não foram feitos, para nunca desfazer uma ação (inclusive uma feita à mão).
@@ -30,6 +35,7 @@ projeto e com o Python do .venv:
 import argparse
 import random
 import sys
+import threading
 import time
 from contextlib import closing
 from datetime import datetime
@@ -41,17 +47,21 @@ from playwright.sync_api import sync_playwright
 
 from automacao import banco, planilhas
 from automacao.abrir_redes import (ESPERA_PARA_REABRIR_S, REDES, NavegadorFechado, abrir_com_insistencia,
-                                   extrair_conta, redes_logadas)
+                                   endereco_de_controle, extrair_conta, navegador_vivo, redes_logadas)
 from automacao.caminhos import PASTA_TRACES, TRAVA_AUTOMACAO
 from automacao.redes import instagram, tiktok
 from automacao.redes.protecao import LimiteDiario, protecao_da_config, registrar_aviso
 from automacao.redes.comum import (Bloqueio, Config, LinhaResumo,
                                    comentarios_da_config, pausa)
-from automacao.terminal import dormir, obter_trava, preparar_console, vigiar_pedido_de_parada
+from automacao.terminal import (PARADA, SaidaComRotulos, definir_rotulo, dormir, obter_trava, preparar_console,
+                                vigiar_pedido_de_parada)
 
 # Primeiros trechos de endereço do Instagram que não são perfis.
 RESERVADOS_INSTAGRAM = {"p", "reel", "reels", "tv", "explore", "stories", "accounts", "direct"}
 MODULOS = {"Instagram": instagram, "TikTok": tiktok}
+# Com as duas redes escolhidas, agem ao mesmo tempo: a primeira na janela de
+# sempre e a segunda numa janela própria do mesmo Chrome.
+REDES_EM_PARALELO = ("Instagram", "TikTok")
 
 
 def interpretar_perfil(texto: str) -> tuple[str, str]:
@@ -123,7 +133,7 @@ def montar_config(salvas: dict[str, str], args: argparse.Namespace) -> Config:
         verificar_comentarios=getattr(args, "verificar_comentarios", False),
         redes=(banco.REDES_ESCOLHA[args.redes] if getattr(args, "redes", None)
                else banco.redes_escolhidas(salvas)),
-        protecao=protecao_da_config(salvas, getattr(args, "anti_bloqueio", False)),
+        protecao=protecao_da_config(salvas, getattr(args, "anti_bloqueio", False), getattr(args, "boost", False)),
         seguir=getattr(args, "seguir", False) or salvas.get("seguir") == "sim",
         ver_stories=getattr(args, "ver_stories", False) or salvas.get("ver_stories") == "sim",
     )
@@ -194,6 +204,12 @@ def main() -> int:
                            help="não recomeça a lista, mesmo se a configuração mandar")
     parser.add_argument("--anti-bloqueio", action="store_true",
                         help="liga o modo anti-bloqueio (bem mais lento e cauteloso) nesta execução")
+    parser.add_argument("--boost", action="store_true",
+                        help="modo boost nesta execução: ignora os tetos por hora e por dia e o limite "
+                             "diário (mais risco de bloqueio); o anti-bloqueio, se ligado, vale mais")
+    parser.add_argument("--uma-rede-por-vez", action="store_true",
+                        help="com as duas redes, uma depois da outra numa janela só (padrão: as duas "
+                             "ao mesmo tempo, cada uma na sua janela)")
     parser.add_argument("--redes", choices=sorted(banco.REDES_ESCOLHA),
                         help="em quais redes agir (padrão: o que está nas configurações)")
     parser.add_argument("--perfil", action="append", dest="perfis_navegador", metavar="NOME_OU_ID",
@@ -404,9 +420,12 @@ def rodar_perfil_navegador(p, conn, rodada_id: int | None, cfg: Config, perfil_n
     (as publicações já feitas ficam no banco e são puladas).
     """
     pasta = banco.pasta_do_perfil(perfil_nav)
+    paralelo = pode_rodar_em_paralelo(cfg, args)
     proximo, bloqueadas, contas, anteriores = 0, set(), None, None
+    proximos = dict.fromkeys(REDES_EM_PARALELO, 0)   # no modo paralelo, cada rede tem a sua lista
     while True:
-        contexto = abrir_com_insistencia(p, pasta)
+        aberto_em = time.time()
+        contexto = abrir_com_insistencia(p, pasta, depuracao=True) if paralelo else abrir_com_insistencia(p, pasta)
         try:
             contexto.grant_permissions(["clipboard-read", "clipboard-write"])
             if args.trace:
@@ -420,14 +439,25 @@ def rodar_perfil_navegador(p, conn, rodada_id: int | None, cfg: Config, perfil_n
                     # pula o que ela já fez) e esquece as paradas da conta anterior.
                     print(f"As contas mudaram ({anteriores} -> {novas}); recomeçando a lista com elas.")
                     proximo, bloqueadas = 0, set()
+                    proximos = dict.fromkeys(REDES_EM_PARALELO, 0)
                 contas = anteriores = novas
             if not contas:
                 return False
-            proximo = processar_perfis(conn, contexto, rodada_id, cfg, alvos, proximo, bloqueadas,
-                                       resumo, contas)
+            endereco = None
+            if paralelo and all(rede in contas and any(r == rede for r, _ in alvos) for rede in REDES_EM_PARALELO):
+                endereco = endereco_de_controle(pasta, aberto_em)
+                if endereco is None:
+                    print("Não consegui abrir a segunda janela; as redes vão uma depois da outra.")
+            if endereco:
+                proximos = processar_em_paralelo(conn, contexto, endereco, rodada_id, cfg, alvos, proximos,
+                                                 bloqueadas, resumo, contas, reabrir=not args.sem_reabrir)
+            else:
+                proximo = processar_perfis(conn, contexto, rodada_id, cfg, alvos, proximo, bloqueadas,
+                                           resumo, contas)
             return True
         except NavegadorFechado as erro:
             proximo = getattr(erro, "proximo", proximo)
+            proximos = getattr(erro, "proximos", proximos)
             if args.sem_reabrir:
                 raise JanelaFechada from erro
             # Só para pelo Parar da interface (ou Ctrl+C).
@@ -445,16 +475,182 @@ def rodar_perfil_navegador(p, conn, rodada_id: int | None, cfg: Config, perfil_n
                 fechar_contexto(contexto)
 
 
+def pode_rodar_em_paralelo(cfg: Config, args: argparse.Namespace) -> bool:
+    """As duas redes ao mesmo tempo? Só com as duas escolhidas, sem --uma-rede-por-vez
+    e sem --trace (o trace só grava o que passa pela janela principal)."""
+    return (all(rede in cfg.redes for rede in REDES_EM_PARALELO)
+            and not getattr(args, "uma_rede_por_vez", False) and not getattr(args, "trace", False))
+
+
+def nova_janela(navegador, contexto):
+    """Abre uma janela nova do Chrome no mesmo perfil e devolve a página dela.
+
+    Janela, e não aba: uma aba que não está na frente fica "escondida" para o
+    site, que pausa o vídeo e deixa de carregar a grade de publicações.
+    """
+    sessao = navegador.new_browser_cdp_session()
+    try:
+        with contexto.expect_page(timeout=30_000) as nova:
+            sessao.send("Target.createTarget", {"url": "about:blank", "newWindow": True})
+    finally:
+        sessao.detach()
+    return nova.value
+
+
+def processar_rede_com_reabertura(conn, contexto, rodada_id: int | None, cfg: Config, rede: str,
+                                  lista: list[tuple[str, str]], inicio: int, bloqueadas: set[str],
+                                  resumo: list[LinhaResumo], contas: dict[str, str],
+                                  nova_pagina, vivo, reabrir: bool = True) -> int:
+    """processar_perfis numa página só desta rede. Devolve o índice seguinte ao último.
+
+    Se só a janela desta rede for fechada (o navegador continua aberto), abre
+    outra e continua do perfil-alvo em que parou. Se o navegador inteiro
+    fechou, levanta NavegadorFechado com `.proximo`.
+    """
+    pagina = nova_pagina(True)
+    while True:
+        try:
+            return processar_perfis(conn, contexto, rodada_id, cfg, lista, inicio, bloqueadas, resumo,
+                                    contas, pagina=pagina)
+        except NavegadorFechado as erro:
+            inicio = getattr(erro, "proximo", inicio)
+            causa = erro
+        except PlaywrightError as erro:
+            if vivo() and not pagina.is_closed():
+                raise  # erro de verdade, não uma janela fechada
+            causa = erro
+        if not reabrir or not vivo():
+            fechado = NavegadorFechado()
+            fechado.proximo = inicio
+            raise fechado from causa
+        origem = causa.__cause__ or causa
+        motivo = getattr(origem, "message", None) or str(origem) or type(origem).__name__
+        print(f"A janela do {rede} foi fechada ({motivo.splitlines()[0][:120]}). Abrindo outra em "
+              f"{ESPERA_PARA_REABRIR_S} s e continuando de onde parou...", flush=True)
+        dormir(ESPERA_PARA_REABRIR_S)
+        pagina = nova_pagina(False)
+
+
+def _rede_em_outra_janela(endereco: str, rodada_id: int | None, cfg: Config, rede: str,
+                          lista: list[tuple[str, str]], inicio: int, bloqueadas: set[str],
+                          resumo: list[LinhaResumo], contas: dict[str, str], reabrir: bool,
+                          resultado: dict) -> None:
+    """Corpo da linha de execução da segunda rede: conexão própria ao mesmo Chrome e ao banco.
+
+    A API do Playwright não pode ser usada por duas linhas de execução, então
+    esta abre a sua (pelo endereço local do Chrome). O que acontecer vai para
+    `resultado`: "proximo", e "fechado", "parado" ou "erro".
+    """
+    definir_rotulo(rede)
+    resultado["proximo"] = inicio
+    try:
+        with sync_playwright() as p, closing(banco.conectar()) as conn:
+            navegador = p.chromium.connect_over_cdp(endereco)
+            contexto = navegador.contexts[0]
+            janela = {}
+
+            def abrir_janela(_primeira: bool):
+                janela["pagina"] = nova_janela(navegador, contexto)
+                return janela["pagina"]
+
+            resultado["proximo"] = processar_rede_com_reabertura(
+                conn, contexto, rodada_id, cfg, rede, lista, inicio, bloqueadas, resumo, contas,
+                nova_pagina=abrir_janela, vivo=navegador.is_connected, reabrir=reabrir)
+            print(f"Lista do {rede} terminada.", flush=True)
+            try:
+                janela["pagina"].close()   # a janela vazia não fica sobrando
+            except (KeyError, PlaywrightError):
+                pass
+    except NavegadorFechado as erro:
+        resultado["proximo"] = getattr(erro, "proximo", resultado["proximo"])
+        resultado["fechado"] = True
+    except KeyboardInterrupt:
+        resultado["parado"] = True
+    except PlaywrightError as erro:
+        resultado["fechado"] = True    # a conexão com o navegador caiu
+        print(f"Perdi a conexão com o navegador ({erro.message.splitlines()[0]}).", flush=True)
+    except Exception as erro:  # noqa: BLE001 - quem decide o que fazer é a linha principal
+        resultado["erro"] = erro
+    finally:
+        definir_rotulo(None)
+        if isinstance(sys.stdout, SaidaComRotulos):
+            sys.stdout.descarregar()
+
+
+def processar_em_paralelo(conn, contexto, endereco: str, rodada_id: int | None, cfg: Config,
+                          alvos: list[tuple[str, str]], proximos: dict[str, int], bloqueadas: set[str],
+                          resumo: list[LinhaResumo], contas: dict[str, str],
+                          reabrir: bool = True) -> dict[str, int]:
+    """Instagram nesta janela e TikTok numa janela própria, ao mesmo tempo.
+
+    Cada rede segue a sua parte da lista; a conta só termina quando as duas
+    terminarem. As linhas do log ganham "[Instagram]" ou "[TikTok]" na frente.
+    Devolve {rede: próximo índice da lista dela}. Se o navegador inteiro
+    fechar, levanta NavegadorFechado com `.proximos`.
+    """
+    principal, outra = REDES_EM_PARALELO
+    listas = {rede: [alvo for alvo in alvos if alvo[0] == rede] for rede in REDES_EM_PARALELO}
+    proximos = dict(proximos)
+    resultado: dict = {}
+    print(f"{principal} e {outra} ao mesmo tempo: o {outra} abre numa janela própria do Chrome.", flush=True)
+    trabalhador = threading.Thread(
+        target=_rede_em_outra_janela, name=outra, daemon=True,
+        args=(endereco, rodada_id, cfg, outra, listas[outra], proximos[outra], bloqueadas, resumo, contas,
+              reabrir, resultado))
+    original = sys.stdout
+    sys.stdout = saida = SaidaComRotulos(original)
+    definir_rotulo(principal)
+    fechado = False
+    try:
+        trabalhador.start()
+        try:
+            proximos[principal] = processar_rede_com_reabertura(
+                conn, contexto, rodada_id, cfg, principal, listas[principal], proximos[principal], bloqueadas,
+                resumo, contas,
+                nova_pagina=lambda primeira: (contexto.pages[0] if primeira and contexto.pages
+                                              else contexto.new_page()),
+                vivo=lambda: navegador_vivo(contexto), reabrir=reabrir)
+            if trabalhador.is_alive():
+                print(f"Lista do {principal} terminada; esperando o {outra} terminar.", flush=True)
+        except NavegadorFechado as erro:
+            proximos[principal] = getattr(erro, "proximo", proximos[principal])
+            fechado = True
+        # Espera em pedaços curtos para o Ctrl+C (Parar) continuar funcionando.
+        limite = time.monotonic() + 15 if fechado else None
+        while trabalhador.is_alive() and (limite is None or time.monotonic() < limite):
+            trabalhador.join(0.5)
+    except KeyboardInterrupt:
+        PARADA.set()                   # a outra rede para na próxima espera
+        trabalhador.join(10)
+        raise
+    finally:
+        definir_rotulo(None)
+        saida.descarregar()
+        sys.stdout = original
+    if "erro" in resultado:
+        print(f"[{outra}] Erro inesperado: {resultado['erro']}. As ações do {outra} pararam nesta conta.")
+    proximos[outra] = resultado.get("proximo", proximos[outra])
+    if resultado.get("parado") and not fechado:
+        raise KeyboardInterrupt
+    if fechado or resultado.get("fechado"):
+        erro = NavegadorFechado()
+        erro.proximos = proximos
+        raise erro
+    return proximos
+
+
 def processar_perfis(conn, contexto, rodada_id: int | None, cfg: Config,
                      perfis: list[tuple[str, str]], inicio: int, bloqueadas: set[str],
-                     resumo: list[LinhaResumo], contas: dict[str, str] | None = None) -> int:
+                     resumo: list[LinhaResumo], contas: dict[str, str] | None = None,
+                     pagina=None) -> int:
     """Processa os perfis-alvo a partir de `inicio`. Devolve o índice seguinte ao último.
 
     `contas` é {rede: "@conta"} das contas logadas que agem neste perfil do
-    navegador; uma rede fora dele é pulada.
+    navegador; uma rede fora dele é pulada. Sem `pagina`, usa a primeira aba.
     """
     logadas = redes_logadas(contexto)
-    pagina = contexto.pages[0] if contexto.pages else contexto.new_page()
+    if pagina is None:
+        pagina = contexto.pages[0] if contexto.pages else contexto.new_page()
     pagina.bring_to_front()
     for indice in range(inicio, len(perfis)):
         rede, perfil = perfis[indice]

@@ -6,8 +6,13 @@ comentários são uma lista: a automação sorteia um para cada publicação.
 
 O formulário fica numa área com rolagem (é mais alto que a janela no tamanho
 mínimo); os botões de salvar ficam sempre visíveis, embaixo.
+
+Os tetos por ação (por hora e por dia) vão para a configuração "tetos" em JSON
+(vazio quando são as sugestões); a validação é a do protecao.validar_tetos.
+Os comentários aceitam emojis, com uma paleta ao lado do campo.
 """
 
+import json
 import re
 import sqlite3
 import tkinter as tk
@@ -18,15 +23,16 @@ from tkinter import messagebox, simpledialog, ttk
 
 from automacao import banco, configuracao
 from automacao.interface import dados
-from automacao.interface.componentes import AreaRolavel, quebrar_na_largura
-from automacao.redes import comum
+from automacao.interface.componentes import AreaRolavel, PaletaEmojis, quebrar_na_largura
+from automacao.redes import comum, protecao
 
 # Opções sim/não, guardadas como "sim" ou "nao" (como o configuracao.validar devolve).
-OPCOES_SIM_NAO = ("anti_bloqueio", "seguir", "ver_stories", "repetir", "continuar_sem_login")
+OPCOES_SIM_NAO = ("anti_bloqueio", "boost", "seguir", "ver_stories", "repetir", "continuar_sem_login")
 CAMPOS = ("modo", "quantidade", "semanas", "compartilhar_com", "limite_diario", "redes",
           "repetir_minutos", *OPCOES_SIM_NAO)
 ESCOLHAS_REDES = (("instagram", "Só Instagram"), ("tiktok", "Só TikTok"), ("ambas", "As duas"))
 MINUTOS_REPETIR = (1, 1440)
+LIMITE_DIARIO = (1, 500)
 
 AJUDA_ANTI_BLOQUEIO = (
     "Deixa a automação bem mais lenta e cautelosa: pausas de minutos entre ações, limites menores por "
@@ -34,19 +40,62 @@ AJUDA_ANTI_BLOQUEIO = (
     "por dia e parada de 48 h ao primeiro aviso da rede. Recomendado para contas novas ou que já "
     "receberam aviso. Nenhuma regra garante que a rede não bloqueie.")
 
+AJUDA_BOOST = (
+    "Vai sem os tetos por hora e por dia, sem o limite diário e sem as pausas longas: bem mais rápido. "
+    "Continua assistindo os vídeos até o fim, com as pausas curtas, sem desfazer curtidas e reposts, sem "
+    "repetir o que já fez e parando (24 h) se a rede avisar.")
+RISCO_BOOST = ("Aumenta bastante o risco de bloqueio da conta. Não vale junto com a proteção anti-bloqueio: "
+               "marcar um desmarca o outro.")
+DICA_LIMITE = "publicações por conta e rede, por dia (1 a 500). Volume baixo evita bloqueios."
+DICA_LIMITE_NO_BOOST = "(ignorado no modo boost; o valor fica guardado para quando desligar)"
+
+# (chave do protecao.CHAVES_TETO, nome na tela)
+NOMES_TETOS = (("curtir", "Curtir"), ("comentar", "Comentar"), ("compartilhar", "Compartilhar"),
+               ("repostar", "Repostar"), ("favoritar", "Favoritar (só TikTok)"), ("seguir", "Seguir"),
+               ("total", "Total (todas as ações)"))
+AJUDA_TETOS = (
+    "No máximo quantas ações cada conta faz em cada rede, por hora e por dia. Os campos já vêm com as "
+    "sugestões do programa (ao lado); mude só se precisar. No modo normal valem estes tetos; com a proteção "
+    "anti-bloqueio, vale o menor entre o daqui e o dela; no modo boost, nenhum. Quando um tipo de ação chega "
+    "ao teto da hora e liberar levaria mais de 3 minutos, aquela ação fica para uma próxima volta; quando "
+    "chega o total da hora, a rede espera.")
+AVISO_TETOS = "Restaurar só preenche os campos: vale depois de Salvar."
+AVISO_TETOS_NO_BOOST = "Ignorados no modo boost (os valores ficam guardados para quando desligar)."
+
+
+class DialogoComentario(simpledialog._QueryString):  # noqa: SLF001 - o mesmo diálogo do askstring
+    """A caixa de editar um comentário, com a paleta de emojis embaixo do campo."""
+
+    def body(self, master: tk.Misc) -> tk.Misc:
+        campo = super().body(master)
+        # O askstring vem com o texto todo selecionado: um emoji o apagaria. O cursor vai para o fim.
+        self.entry.selection_clear()
+        self.entry.icursor("end")
+        self.paleta = PaletaEmojis(master, alvo=self.entry)
+        self.paleta.grid(row=2, padx=5, pady=(0, 5), sticky="w")
+        return campo
+
+
+def pedir_comentario(parent: tk.Misc, inicial: str) -> str | None:
+    """Abre a caixa de editar comentário. None se cancelou."""
+    return DialogoComentario("Editar comentário", "Comentário:", initialvalue=inicial, parent=parent).result
+
 
 class AbaConfiguracoes(ttk.Frame):
     def __init__(self, master: tk.Misc, ao_salvar: Callable[[], None] | None = None) -> None:
         super().__init__(master, padding=(16, 16, 16, 12))
         self.ao_salvar = ao_salvar
         self.vars = {campo: tk.StringVar(self) for campo in CAMPOS}
+        # Tetos por ação: {(período, chave): valor do campo}; viram a configuração "tetos" (JSON).
+        self.vars_tetos = {(periodo, chave): tk.StringVar(self)
+                           for periodo in protecao.PERIODOS_TETO for chave, _ in NOMES_TETOS}
         self.var_novo_comentario = tk.StringVar(self)
         self._comentarios: list[str] = []
         self._salvos: dict[str, str] = {}
         self._carregando = False
         self._montar()
         self.carregar()
-        for var in self.vars.values():
+        for var in (*self.vars.values(), *self.vars_tetos.values()):
             var.trace_add("write", self._ao_editar)
         self.var_novo_comentario.trace_add("write", self._contar_letras)
 
@@ -72,8 +121,9 @@ class AbaConfiguracoes(ttk.Frame):
 
         self._apenas_digitos = (self.register(_apenas_digitos), "%P")
         self._ate_4_digitos = (self.register(lambda texto: _apenas_digitos(texto, 4)), "%P")
+        self._ate_5_digitos = (self.register(lambda texto: _apenas_digitos(texto, 5)), "%P")
         partes = (self._montar_redes, self._montar_modo, self._montar_comentarios,
-                  self._montar_compartilhamento, self._montar_extras, self._montar_ritmo)
+                  self._montar_compartilhamento, self._montar_extras, self._montar_ritmo, self._montar_tetos)
         for linha, montar in enumerate(partes, start=1):
             montar(interior).grid(row=linha, column=0, sticky="ew", pady=(0, 8), padx=(0, 4))
         self.area.ajustar_largura_pedida()
@@ -145,14 +195,17 @@ class AbaConfiguracoes(ttk.Frame):
         self.lista_comentarios.bind("<Double-Button-1>", lambda _e: self.editar_comentario())
         self.lista_comentarios.bind("<Delete>", lambda _e: self.remover_comentarios())
 
-        entrada = ttk.Entry(quadro, textvariable=self.var_novo_comentario)
+        self.entrada_comentario = entrada = ttk.Entry(quadro, textvariable=self.var_novo_comentario)
         entrada.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         entrada.bind("<Return>", lambda _e: self.adicionar_comentario())
         self.rotulo_contador = ttk.Label(quadro, style="Suave.TLabel", width=8, anchor="e")
         self.rotulo_contador.grid(row=2, column=1, columnspan=2, sticky="e", pady=(8, 0))
+        # Emojis: entram no campo acima, onde está o cursor.
+        self.paleta_emojis = PaletaEmojis(quadro, alvo=entrada)
+        self.paleta_emojis.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         botoes = ttk.Frame(quadro)
-        botoes.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        botoes.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Button(botoes, text="Adicionar", command=self.adicionar_comentario).pack(side="left")
         ttk.Button(botoes, text="Editar…", command=self.editar_comentario).pack(side="left", padx=6)
         ttk.Button(botoes, text="Remover selecionados", command=self.remover_comentarios).pack(side="left")
@@ -160,7 +213,7 @@ class AbaConfiguracoes(ttk.Frame):
         self.rotulo_quantos.pack(side="left", padx=(12, 0))
         self.rotulo_erro_comentario = quebrar_na_largura(ttk.Label(quadro, style="Erro.TLabel", wraplength=480,
                                                                    justify="left"))
-        self.rotulo_erro_comentario.grid(row=4, column=0, columnspan=3, sticky="ew")
+        self.rotulo_erro_comentario.grid(row=5, column=0, columnspan=3, sticky="ew")
         return quadro
 
     def _montar_compartilhamento(self, master: tk.Misc) -> ttk.LabelFrame:
@@ -208,18 +261,60 @@ class AbaConfiguracoes(ttk.Frame):
         return quadro
 
     def _montar_ritmo(self, master: tk.Misc) -> ttk.LabelFrame:
-        quadro = ttk.LabelFrame(master, text="Limite diário e proteção anti-bloqueio", padding=10)
+        quadro = ttk.LabelFrame(master, text="Limite diário, proteção e boost", padding=10)
         quadro.columnconfigure(2, weight=1)
         ttk.Label(quadro, text="Limite diário:").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Spinbox(quadro, from_=1, to=500, width=6, textvariable=self.vars["limite_diario"],
-                    validate="key", validatecommand=self._apenas_digitos).grid(row=0, column=1, sticky="w")
-        self._dica(quadro, "publicações por conta e rede, por dia (1 a 500). Volume baixo evita "
-                           "bloqueios.").grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        self.spin_limite = ttk.Spinbox(quadro, from_=LIMITE_DIARIO[0], to=LIMITE_DIARIO[1], width=6,
+                                       textvariable=self.vars["limite_diario"], validate="key",
+                                       validatecommand=self._apenas_digitos)
+        self.spin_limite.grid(row=0, column=1, sticky="w")
+        self.dica_limite = self._dica(quadro, DICA_LIMITE)
+        self.dica_limite.grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        # Anti-bloqueio e boost são opostos: marcar um desmarca o outro.
         self.check_anti_bloqueio = ttk.Checkbutton(quadro, text="Proteção anti-bloqueio",
                                                    variable=self.vars["anti_bloqueio"], onvalue="sim",
-                                                   offvalue="nao")
+                                                   offvalue="nao", command=self._ao_marcar_anti_bloqueio)
         self.check_anti_bloqueio.grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
         self._dica(quadro, AJUDA_ANTI_BLOQUEIO).grid(row=2, column=0, columnspan=3, sticky="ew", padx=(24, 0))
+        self.check_boost = ttk.Checkbutton(quadro, text="Modo boost (ignorar os tetos)", variable=self.vars["boost"],
+                                           onvalue="sim", offvalue="nao", command=self._ao_marcar_boost)
+        self.check_boost.grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        self._dica(quadro, AJUDA_BOOST).grid(row=4, column=0, columnspan=3, sticky="ew", padx=(24, 0))
+        quebrar_na_largura(ttk.Label(quadro, text=RISCO_BOOST, style="Aviso.TLabel", wraplength=480,
+                                     justify="left")).grid(row=5, column=0, columnspan=3, sticky="ew",
+                                                           padx=(24, 0), pady=(2, 0))
+        return quadro
+
+    def _montar_tetos(self, master: tk.Misc) -> ttk.LabelFrame:
+        quadro = ttk.LabelFrame(master, text="Tetos por ação (por conta e por rede)", padding=10)
+        quadro.columnconfigure(3, weight=1)
+        self._dica(quadro, AJUDA_TETOS).grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 6))
+        for coluna, titulo in ((1, "Por hora"), (2, "Por dia")):
+            ttk.Label(quadro, text=titulo, style="Forte.TLabel").grid(row=1, column=coluna, sticky="w", padx=(0, 8))
+        sugeridos = protecao.tetos_sugeridos()
+        anti = protecao.tetos_sugeridos(protecao.PROTECAO_ANTI_BLOQUEIO)
+        self.spins_tetos: list[ttk.Spinbox] = []
+        linha = 1
+        for linha, (chave, nome) in enumerate(NOMES_TETOS, start=2):
+            ttk.Label(quadro, text=f"{nome}:").grid(row=linha, column=0, sticky="w", padx=(0, 12), pady=1)
+            for coluna, periodo in ((1, "por_hora"), (2, "por_dia")):
+                spin = ttk.Spinbox(quadro, from_=1, to=protecao.TETO_MAXIMO, width=6,
+                                   textvariable=self.vars_tetos[(periodo, chave)], validate="key",
+                                   validatecommand=self._ate_5_digitos)
+                spin.grid(row=linha, column=coluna, sticky="w", padx=(0, 8), pady=1)
+                self.spins_tetos.append(spin)
+            dica = (f"sugestão: {sugeridos['por_hora'][chave]}/h · {sugeridos['por_dia'][chave]}/dia "
+                    f"(anti-bloqueio: até {anti['por_hora'][chave]}/h · {anti['por_dia'][chave]}/dia)")
+            quebrar_na_largura(ttk.Label(quadro, text=dica, style="Suave.TLabel", wraplength=260,
+                                         justify="left")).grid(row=linha, column=3, sticky="ew", pady=1)
+        rodape = ttk.Frame(quadro)
+        rodape.grid(row=linha + 1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        rodape.columnconfigure(1, weight=1)
+        self.botao_sugestoes = ttk.Button(rodape, text="Restaurar sugestões", command=self.restaurar_sugestoes)
+        self.botao_sugestoes.grid(row=0, column=0, sticky="w")
+        self.aviso_tetos = quebrar_na_largura(ttk.Label(rodape, text=AVISO_TETOS, style="Suave.TLabel",
+                                                        wraplength=300, justify="left"))
+        self.aviso_tetos.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         return quadro
 
     # ------------------------------------------------------------ dados
@@ -227,11 +322,28 @@ class AbaConfiguracoes(ttk.Frame):
     def comentarios(self) -> list[str]:
         return list(self._comentarios)
 
+    def tetos_do_formulario(self) -> dict[str, dict[str, int | str]]:
+        """Os tetos dos campos (números; o que não for número vai como está, para a validação apontar)."""
+        tetos: dict[str, dict[str, int | str]] = {}
+        for (periodo, chave), var in self.vars_tetos.items():
+            texto = var.get().strip()
+            tetos.setdefault(periodo, {})[chave] = int(texto) if texto.isascii() and texto.isdecimal() else texto
+        return tetos
+
     def formulario(self) -> dict[str, str]:
-        """Os campos como o configuracao.validar espera (comentários um por linha)."""
+        """Os campos como o configuracao.validar espera (comentários um por linha, tetos em JSON)."""
         campos = {campo: var.get() for campo, var in self.vars.items()}
         campos["comentarios"] = "\n".join(self._comentarios)
+        campos["tetos"] = json.dumps(self.tetos_do_formulario(), ensure_ascii=False)
         return campos
+
+    def _preencher_tetos(self, tetos: dict[str, dict[str, int]]) -> None:
+        for (periodo, chave), var in self.vars_tetos.items():
+            var.set(str(tetos[periodo][chave]))
+
+    def restaurar_sugestoes(self) -> None:
+        """Põe as sugestões nos campos dos tetos (só valem depois de salvar)."""
+        self._preencher_tetos(protecao.tetos_sugeridos())
 
     def _preencher(self, valores: dict[str, str]) -> None:
         self._carregando = True
@@ -244,12 +356,14 @@ class AbaConfiguracoes(ttk.Frame):
                     valor = "ambas"  # o que a automação faz com um valor desconhecido
                 var.set(valor)
             self._definir_comentarios(comum.comentarios_da_config(valores))
+            self._preencher_tetos(protecao.ler_tetos(valores.get("tetos")))  # vazio: as sugestões
             self.var_novo_comentario.set("")
             self.rotulo_erro_comentario.configure(text="")
         finally:
             self._carregando = False
         self._atualizar_modo()
         self._atualizar_repetir()
+        self._atualizar_boost()
         self._ao_editar()
 
     def carregar(self) -> None:
@@ -270,7 +384,10 @@ class AbaConfiguracoes(ttk.Frame):
         self._preencher(banco.CONFIG_PADRAO)
 
     def _normalizado(self) -> dict[str, str]:
-        return {campo: valor.strip() for campo, valor in self.formulario().items()}
+        valores = {campo: valor.strip() for campo, valor in self.formulario().items()}
+        if self.tetos_do_formulario() == protecao.tetos_sugeridos():
+            valores["tetos"] = ""  # como o banco guarda as sugestões
+        return valores
 
     def tem_alteracoes(self) -> bool:
         return self._normalizado() != self._salvos
@@ -337,8 +454,7 @@ class AbaConfiguracoes(ttk.Frame):
             self.rotulo_erro_comentario.configure(text="Selecione um comentário na lista para editar.")
             return
         indice = selecionados[0]
-        novo = simpledialog.askstring("Editar comentário", "Comentário:", parent=self,
-                                      initialvalue=self._comentarios[indice])
+        novo = pedir_comentario(self, self._comentarios[indice])
         if novo is None:
             return
         outros = self._comentarios[:indice] + self._comentarios[indice + 1:]
@@ -387,6 +503,38 @@ class AbaConfiguracoes(ttk.Frame):
             minutos.set(salvo if _minutos_validos(salvo) else banco.CONFIG_PADRAO["repetir_minutos"])
         self._atualizar_repetir()
 
+    def _boost_vale(self) -> bool:
+        """O boost está marcado e vale (com os dois marcados, vale o anti-bloqueio, como na automação)."""
+        return self.vars["boost"].get() == "sim" and self.vars["anti_bloqueio"].get() != "sim"
+
+    def _atualizar_boost(self) -> None:
+        """No boost, o limite diário e os tetos são ignorados: os campos ficam travados (nada é apagado)."""
+        boost = self._boost_vale()
+        estado = "disabled" if boost else "normal"
+        for campo in (self.spin_limite, *self.spins_tetos, self.botao_sugestoes):
+            campo.configure(state=estado)
+        self.dica_limite.configure(text=DICA_LIMITE_NO_BOOST if boost else DICA_LIMITE,
+                                   style="Aviso.TLabel" if boost else "Suave.TLabel")
+        self.aviso_tetos.configure(text=AVISO_TETOS_NO_BOOST if boost else AVISO_TETOS,
+                                   style="Aviso.TLabel" if boost else "Suave.TLabel")
+
+    def _ao_marcar_boost(self) -> None:
+        if self.vars["boost"].get() == "sim":
+            self.vars["anti_bloqueio"].set("nao")
+            # O campo vai ficar travado: um valor inválido nele impediria salvar.
+            limite = self.vars["limite_diario"]
+            if not _limite_valido(limite.get()):
+                salvo = self._salvos.get("limite_diario", "")
+                limite.set(salvo if _limite_valido(salvo) else banco.CONFIG_PADRAO["limite_diario"])
+            if protecao.validar_tetos(self.formulario()["tetos"])[1]:  # os tetos também travam
+                self._preencher_tetos(protecao.ler_tetos(self._salvos.get("tetos")))
+        self._atualizar_boost()
+
+    def _ao_marcar_anti_bloqueio(self) -> None:
+        if self.vars["anti_bloqueio"].get() == "sim":
+            self.vars["boost"].set("nao")
+        self._atualizar_boost()
+
     def _contar_letras(self, *_args) -> None:
         tamanho = len(self.var_novo_comentario.get().strip())
         demais = tamanho > dados.MAXIMO_LETRAS_COMENTARIO
@@ -406,6 +554,11 @@ class AbaConfiguracoes(ttk.Frame):
 def _apenas_digitos(texto: str, maximo: int = 3) -> bool:
     """Só deixa digitar algarismos de 0 a 9 (até `maximo`) nos campos numéricos."""
     return texto == "" or (len(texto) <= maximo and texto.isascii() and texto.isdigit())
+
+
+def _limite_valido(texto: str) -> bool:
+    texto = texto.strip()
+    return texto.isascii() and texto.isdecimal() and LIMITE_DIARIO[0] <= int(texto) <= LIMITE_DIARIO[1]
 
 
 def _minutos_validos(texto: str) -> bool:

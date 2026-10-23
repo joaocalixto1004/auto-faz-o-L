@@ -86,3 +86,56 @@ def vigiar_pedido_de_parada(intervalo: float = 0.5) -> None:
             time.sleep(intervalo)
 
     threading.Thread(target=vigiar, name="pedido-de-parada", daemon=True).start()
+
+
+# ------------------------------------------- saída de várias linhas de execução
+
+_rotulo = threading.local()
+
+
+def definir_rotulo(rotulo: str | None) -> None:
+    """Rótulo das linhas que esta linha de execução imprime (ex.: "TikTok"); None tira."""
+    _rotulo.valor = rotulo
+
+
+class SaidaComRotulos:
+    """Envolve a saída para duas redes imprimirem ao mesmo tempo sem misturar.
+
+    Cada linha de execução junta o que escreve até o fim da linha e só então
+    a manda inteira, com o rótulo dela na frente ("[TikTok]     curtir  feito").
+    Linhas que já começam com "[" (ex.: "[TikTok] Conta: @x") ficam como estão.
+    """
+
+    def __init__(self, fluxo) -> None:
+        self.fluxo = fluxo
+        self._trava = threading.Lock()
+        self._pendente = threading.local()
+
+    def write(self, texto: str) -> int:
+        juntado = getattr(self._pendente, "texto", "") + texto
+        *linhas, resto = juntado.split("\n")
+        self._pendente.texto = resto
+        if linhas:
+            rotulo = getattr(_rotulo, "valor", None)
+            if rotulo:
+                linhas = [f"[{rotulo}] {linha}" if linha and not linha.startswith("[") else linha
+                          for linha in linhas]
+            with self._trava:
+                self.fluxo.write("\n".join(linhas) + "\n")
+        return len(texto)
+
+    def flush(self) -> None:
+        with self._trava:
+            self.fluxo.flush()
+
+    def descarregar(self) -> None:
+        """Manda o pedaço sem fim de linha que esta linha de execução ainda guarda."""
+        resto = getattr(self._pendente, "texto", "")
+        self._pendente.texto = ""
+        if resto:
+            with self._trava:
+                self.fluxo.write(resto)
+                self.fluxo.flush()
+
+    def __getattr__(self, nome: str):
+        return getattr(self.fluxo, nome)

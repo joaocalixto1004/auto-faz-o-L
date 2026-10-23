@@ -44,7 +44,7 @@ from automacao.terminal import preparar_console
 TITULO = "Automação das redes sociais"
 NOMES_PROCESSOS = {"login": "Verificação de login", "automacao": "Automação"}
 ROTULOS_RESUMO = ("Redes", "Contas ativas", "Publicações", "Comentários", "Ações extras", "Limite diário",
-                  "Proteção anti-bloqueio", "Perfis a acessar", "Compartilhar com")
+                  "Tetos", "Proteção", "Perfis a acessar", "Compartilhar com")
 INTERVALO_LEITURA_MS = 100   # de quanto em quanto tempo a saída do processo é lida
 LINHAS_POR_LEITURA = 500
 MAXIMO_LINHAS_SAIDA = 5000   # linhas mais antigas saem do registro
@@ -254,8 +254,10 @@ class AbaInicio(ttk.Frame):
             self.escrever(f"Erro ao ler o banco de dados: {erro}", "erro")
         self.configuracoes = configuracoes
         self._mostrar_pausas()
+        boost = dados.modo_protecao(configuracoes) == "boost"
         for rotulo, texto in dados.resumo_configuracao(configuracoes):
-            self._rotulos_resumo[rotulo].configure(text=texto)
+            estilo = "Aviso.TLabel" if boost and rotulo in ("Limite diário", "Tetos", "Proteção") else "TLabel"
+            self._rotulos_resumo[rotulo].configure(text=texto, style=estilo)
         self._mostrar_perfis()
         self._mostrar_destinatarios(configuracoes.get("compartilhar_com", ""))
         if contas is not None:

@@ -13,10 +13,11 @@ Os limites são por conta e por rede, contados no banco (ações que chegaram a
 clicar: "feito" e "nao_confirmado") em janelas de 1 hora e do dia.
 """
 
+import json
 import random
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from automacao import banco
@@ -71,21 +72,30 @@ class Protecao:
     comentario_repetido_dias: int | None = None          # o mesmo texto não volta nesse período
     pausa_apos_aviso_h: float = 24                       # conta em pausa depois de um aviso da rede
     pausa_geral_dois_avisos_h: float | None = None       # avisos em 2 contas no dia: todas param
+    # Boost: sem tetos por hora/dia, sem limite diário, sem intervalo entre comentários
+    # e sem pausas longas. O resto continua (vídeo até o fim, pausas curtas, avisos da rede).
+    sem_tetos: bool = False
 
     @property
     def descricao(self) -> str:
-        return ("anti-bloqueio (lento e cauteloso)" if self.nome == "anti_bloqueio"
-                else "normal")
+        texto = {"anti_bloqueio": "anti-bloqueio (lento e cauteloso)",
+                 "boost": "boost (sem tetos por hora e por dia)"}.get(self.nome, "normal")
+        if not self.sem_tetos:
+            texto += f"; tetos: {self.por_hora.get('total')} ações por hora e {self.por_dia.get('total')} por dia"
+        return texto
 
+
+# Até quanto vale esperar o teto por hora de um tipo de ação; acima disso, pula a ação.
+ESPERA_MAXIMA_TETO_DO_TIPO_S = 180
 
 PROTECAO_NORMAL = Protecao(
     nome="normal",
     pausa_leitura=(3.0, 8.0),
     pausa_foto=(5.0, 12.0),
     pausa_item_carrossel=(2.5, 6.0),
-    pausa_entre_acoes=(8.0, 25.0),
-    pausa_entre_publicacoes=(30.0, 90.0),
-    pausa_entre_perfis=(40.0, 120.0),
+    pausa_entre_acoes=(4.0, 12.0),
+    pausa_entre_publicacoes=(10.0, 30.0),      # o teto por hora é que segura o volume
+    pausa_entre_perfis=(20.0, 60.0),
     pausa_entre_contas=(300.0, 600.0),
     por_hora={"curtir": 15, "comentar": 5, "compartilhar": 5, "repostar": 4, "favoritar": 10, "seguir": 8,
               "total": 30},
@@ -124,10 +134,83 @@ PROTECAO_ANTI_BLOQUEIO = Protecao(
 )
 
 
-def protecao_da_config(salvas: dict[str, str], forcar_anti: bool = False) -> Protecao:
+PROTECAO_BOOST = replace(PROTECAO_NORMAL, nome="boost", sem_tetos=True, intervalo_min_comentarios_s=0)
+
+# Tetos que a pessoa pode mudar na interface (config "tetos", em JSON). Vazio:
+# valem as sugestões, que são os tetos do modo normal.
+CHAVES_TETO = (*TIPOS, "total")
+PERIODOS_TETO = ("por_hora", "por_dia")
+TETO_MAXIMO = 10_000
+
+
+def tetos_sugeridos(protecao: Protecao = PROTECAO_NORMAL) -> dict[str, dict[str, int]]:
+    """{"por_hora": {tipo: n}, "por_dia": {tipo: n}} de um modo (cópia, pode mudar à vontade)."""
+    return {"por_hora": dict(protecao.por_hora), "por_dia": dict(protecao.por_dia)}
+
+
+def validar_tetos(texto: str | None) -> tuple[dict[str, dict[str, int]], list[str]]:
+    """Confere os tetos enviados (JSON). Devolve (tetos completos, erros).
+
+    O que não vier fica com a sugestão. Cada teto é um número inteiro de 1 a
+    TETO_MAXIMO, e o da hora não pode passar do dia.
+    """
+    tetos, erros = tetos_sugeridos(), []
+    if not (texto or "").strip():
+        return tetos, erros
+    try:
+        enviados = json.loads(texto)
+    except json.JSONDecodeError:
+        return tetos, ["Os tetos por ação vieram num formato inválido; restaure as sugestões."]
+    if not isinstance(enviados, dict):
+        return tetos, ["Os tetos por ação vieram num formato inválido; restaure as sugestões."]
+    for periodo in PERIODOS_TETO:
+        valores = enviados.get(periodo) or {}
+        if not isinstance(valores, dict):
+            erros.append("Os tetos por ação vieram num formato inválido; restaure as sugestões.")
+            continue
+        for chave in CHAVES_TETO:
+            if chave not in valores:
+                continue
+            valor = valores[chave]
+            if isinstance(valor, str) and valor.strip().isascii() and valor.strip().isdecimal():
+                valor = int(valor.strip())
+            if isinstance(valor, bool) or not isinstance(valor, int) or not 1 <= valor <= TETO_MAXIMO:
+                erros.append(f"O teto {periodo.replace('_', ' ')} de {chave} precisa ser um número de 1 a "
+                             f"{TETO_MAXIMO}.")
+                continue
+            tetos[periodo][chave] = valor
+    for chave in CHAVES_TETO:
+        if tetos["por_hora"][chave] > tetos["por_dia"][chave]:
+            erros.append(f"O teto por hora de {chave} ({tetos['por_hora'][chave]}) não pode ser maior que o "
+                         f"do dia ({tetos['por_dia'][chave]}).")
+    return tetos, erros
+
+
+def ler_tetos(texto: str | None) -> dict[str, dict[str, int]]:
+    """Os tetos salvos; se algo estiver estragado, valem as sugestões."""
+    tetos, erros = validar_tetos(texto)
+    return tetos_sugeridos() if erros else tetos
+
+
+def protecao_da_config(salvas: dict[str, str], forcar_anti: bool = False, forcar_boost: bool = False) -> Protecao:
+    """O modo de proteção escolhido, com os tetos da interface.
+
+    Com anti-bloqueio e boost ligados, vale o anti-bloqueio (o mais cauteloso).
+    No normal valem os tetos escolhidos; no anti-bloqueio, o menor entre eles e
+    os do modo; no boost, nenhum.
+    """
+    tetos = ler_tetos(salvas.get("tetos"))
     if forcar_anti or salvas.get("anti_bloqueio") == "sim":
-        return PROTECAO_ANTI_BLOQUEIO
-    return PROTECAO_NORMAL
+        base = PROTECAO_ANTI_BLOQUEIO
+        tetos = {periodo: {chave: min(teto, tetos[periodo][chave]) for chave, teto in getattr(base, periodo).items()}
+                 for periodo in PERIODOS_TETO}
+    elif forcar_boost or salvas.get("boost") == "sim":
+        return PROTECAO_BOOST
+    else:
+        base = PROTECAO_NORMAL
+    if tetos == tetos_sugeridos(base):
+        return base
+    return replace(base, **tetos)
 
 
 # --------------------------------------------------------- estado da execução
@@ -201,7 +284,7 @@ def controlar_ritmo(conn, protecao: Protecao, rede: str, conta: str | None, nome
         def dormir(segundos: float, _original=dormir) -> None:  # noqa: ARG001
             raise PularAcao("teto por hora ou pausa de ritmo: só assistindo, sem curtir")
     tipo = tipo_da_acao(nome_acao)
-    if tipo is None:
+    if tipo is None or protecao.sem_tetos:
         return
     esperar_horario(protecao, dormir, relogio)
 
@@ -216,15 +299,22 @@ def controlar_ritmo(conn, protecao: Protecao, rede: str, conta: str | None, nome
     if sum(1 for tp, _ in hoje if tp == tipo) >= protecao.por_dia[tipo]:
         raise PularAcao(f"teto do dia para {tipo}{quem} atingido ({protecao.por_dia[tipo]}); fica para amanhã")
 
-    # Teto por hora: espera a ação mais antiga da janela sair dela.
+    # Teto por hora: a ação mais antiga da janela precisa sair dela.
     hora = [(tp, m) for tp, (_, m) in zip(tipos, feitas) if tp and m > agora - timedelta(hours=1)]
     do_tipo = sorted(m for tp, m in hora if tp == tipo)
     todas = sorted(m for _, m in hora)
-    espera = 0.0
+    espera_tipo = espera_total = 0.0
     if len(do_tipo) >= protecao.por_hora[tipo]:
-        espera = max(espera, (do_tipo[len(do_tipo) - protecao.por_hora[tipo]] + timedelta(hours=1) - agora).total_seconds())
+        espera_tipo = (do_tipo[len(do_tipo) - protecao.por_hora[tipo]] + timedelta(hours=1) - agora).total_seconds()
     if len(todas) >= protecao.por_hora["total"]:
-        espera = max(espera, (todas[len(todas) - protecao.por_hora["total"]] + timedelta(hours=1) - agora).total_seconds())
+        espera_total = (todas[len(todas) - protecao.por_hora["total"]] + timedelta(hours=1) - agora).total_seconds()
+    # Só este tipo está no teto e falta muito: pula a ação (não grava nada; ela é
+    # feita numa próxima volta) em vez de parar a rede inteira, com o vídeo em
+    # loop na tela, até a hora liberar. O teto total, esse sim, faz esperar.
+    if espera_tipo > ESPERA_MAXIMA_TETO_DO_TIPO_S and espera_tipo > espera_total:
+        raise PularAcao(f"teto por hora de {tipo}{quem} atingido ({protecao.por_hora[tipo]}); "
+                        "fica para a próxima volta")
+    espera = max(espera_tipo, espera_total)
     if espera > 0:
         _esperar(espera + random.uniform(30, 120), f"teto por hora atingido ({tipo})", dormir)
 

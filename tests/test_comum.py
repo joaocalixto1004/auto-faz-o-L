@@ -432,7 +432,7 @@ def test_antes_de_clicar_no_modo_simular_nao_grava(cenario, conn):
 
     cenario.rodar(config(simular=True), publicacao(), [("curtir", curtir)])
     assert contar(conn, "acoes") == 0
-    assert comum._ao_clicar is None
+    assert comum._linha.ao_clicar is None
 
 
 def test_limite_diario_atingido_levanta_e_nao_abre(cenario, conn):
@@ -444,6 +444,15 @@ def test_limite_diario_atingido_levanta_e_nao_abre(cenario, conn):
     assert issubclass(comum.LimiteDiario, comum.Bloqueio)
     assert cenario.aberturas == 0 and curtir.chamadas == 0
     assert contar(conn, "publicacoes") == 2
+
+
+def test_boost_ignora_o_limite_diario(cenario, conn):
+    from automacao.redes.protecao import PROTECAO_BOOST
+    ja_trabalhada_hoje(conn, "P1")
+    ja_trabalhada_hoje(conn, "P2")
+    curtir = AcaoFalsa()
+    cenario.rodar(config(limite_diario=2, protecao=PROTECAO_BOOST), publicacao("NOVA"), [("curtir", curtir)])
+    assert cenario.aberturas == 1 and curtir.chamadas == 1
 
 
 def test_limite_diario_abaixo_do_limite_continua(cenario, conn):
@@ -514,7 +523,7 @@ def test_comentarios_da_config_le_lista_em_json_e_usa_reserva():
 
 
 def test_sortear_comentario_nunca_repete_o_anterior_e_usa_todos(monkeypatch):
-    monkeypatch.setattr(comum, "_ultimo_comentario", None)
+    monkeypatch.setattr(comum._linha, "ultimo_comentario", None)
     cfg = _cfg_comentarios("A", "B", "C")
     sorteados = [comum.sortear_comentario(cfg) for _ in range(300)]
     assert set(sorteados) == {"A", "B", "C"}
@@ -522,7 +531,7 @@ def test_sortear_comentario_nunca_repete_o_anterior_e_usa_todos(monkeypatch):
 
 
 def test_sortear_comentario_com_uma_opcao_repete_ela(monkeypatch):
-    monkeypatch.setattr(comum, "_ultimo_comentario", None)
+    monkeypatch.setattr(comum._linha, "ultimo_comentario", None)
     cfg = _cfg_comentarios("Unico")
     assert [comum.sortear_comentario(cfg) for _ in range(3)] == ["Unico"] * 3
     sem_lista = comum.Config("quantidade", 3, 2, "Boa!!!", "x", 40, False)

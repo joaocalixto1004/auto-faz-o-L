@@ -101,14 +101,22 @@ class NavegadorFechado(Exception):
 
 
 def abrir_navegador(p: Playwright, pasta_perfil: Path = PASTA_PERFIL,
-                    headless: bool = False) -> BrowserContext:
-    """Abre o Chrome com um perfil persistente (cookies e sessões ficam salvos)."""
+                    headless: bool = False, depuracao: bool = False) -> BrowserContext:
+    """Abre o Chrome com um perfil persistente (cookies e sessões ficam salvos).
+
+    Com `depuracao`, o Chrome também aceita uma segunda conexão local (porta
+    sorteada, só em 127.0.0.1): é por ela que a outra rede age ao mesmo tempo,
+    numa janela própria (veja endereco_de_controle).
+    """
     pasta_perfil.mkdir(parents=True, exist_ok=True)
+    args = ["--disable-blink-features=AutomationControlled", "--start-maximized"]
+    if depuracao:
+        args.append("--remote-debugging-port=0")
     opcoes = dict(
         user_data_dir=str(pasta_perfil),
         headless=headless,
         no_viewport=True,
-        args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
+        args=args,
         ignore_default_args=["--enable-automation"],
     )
     try:
@@ -329,6 +337,28 @@ ESPERA_PARA_REABRIR_S = 3
 MAXIMO_FALHAS_AO_ABRIR = 5
 
 
+def endereco_de_controle(pasta_perfil: Path, aberto_em: float, espera_s: float = 10) -> str | None:
+    """Endereço local para uma segunda conexão ao Chrome aberto com depuracao=True.
+
+    O Chrome grava a porta sorteada no arquivo DevToolsActivePort da pasta do
+    perfil. Um arquivo mais antigo que `aberto_em` (time.time() de antes de
+    abrir) é de uma execução anterior e não vale. None se não aparecer a tempo.
+    """
+    arquivo = pasta_perfil / "DevToolsActivePort"
+    limite = time.monotonic() + espera_s
+    while True:
+        try:
+            if arquivo.stat().st_mtime >= aberto_em - 1:
+                porta = arquivo.read_text(encoding="utf-8").split("\n", 1)[0].strip()
+                if porta.isdecimal() and int(porta) > 0:
+                    return f"http://127.0.0.1:{porta}"
+        except OSError:
+            pass
+        if time.monotonic() >= limite:
+            return None
+        time.sleep(0.2)
+
+
 def navegador_vivo(contexto: BrowserContext) -> bool:
     try:
         contexto.cookies()
@@ -337,11 +367,12 @@ def navegador_vivo(contexto: BrowserContext) -> bool:
         return False
 
 
-def abrir_com_insistencia(p: Playwright, pasta_perfil: Path | None = None) -> BrowserContext:
+def abrir_com_insistencia(p: Playwright, pasta_perfil: Path | None = None,
+                          depuracao: bool = False) -> BrowserContext:
     """Abre o navegador no perfil; se a pasta ainda estiver sendo liberada, tenta de novo."""
     for tentativa in range(1, MAXIMO_FALHAS_AO_ABRIR + 1):
         try:
-            return abrir_navegador(p, pasta_perfil or PASTA_PERFIL)
+            return abrir_navegador(p, pasta_perfil or PASTA_PERFIL, depuracao=depuracao)
         except PlaywrightError as erro:
             if tentativa == MAXIMO_FALHAS_AO_ABRIR:
                 raise

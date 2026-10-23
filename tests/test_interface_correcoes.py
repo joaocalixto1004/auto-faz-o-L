@@ -6,6 +6,7 @@ da automação, caixas de diálogo trocadas e banco/planilhas temporários (conf
 """
 
 import dataclasses
+import json
 import queue
 import time
 import tkinter as tk
@@ -16,7 +17,8 @@ from tkinter import ttk
 import pytest
 
 from automacao import banco, planilhas, terminal
-from automacao.interface import componentes, dados
+from automacao.redes import comum, protecao
+from automacao.interface import aba_configuracoes, componentes, dados
 from automacao.interface import janela as interface
 from automacao.interface import processo as processo_interface
 from test_interface_gui import (bombear, cortados, criar_conta, criar_script, dialogos,  # noqa: F401 - fixtures
@@ -283,10 +285,13 @@ def test_quebra_de_texto_so_alarga_com_folga(janela):
 
 # ------------------------------------------------------------ tamanho com zoom
 
+@pytest.mark.parametrize("protecao", ["anti_bloqueio", "boost"])
 @pytest.mark.parametrize(("zoom", "tela"), [(1.0, (1920, 1080)), (1.25, (1920, 1080)), (1.5, (1920, 1080)),
                                             (1.0, (1366, 768))])
-def test_nada_cortado_no_tamanho_minimo_com_zoom(monkeypatch, dialogos, zoom, tela):
-    """Com zoom de 125% e 150% (fontes maiores, margens iguais), nada fica cortado e a saída tem 4 linhas."""
+def test_nada_cortado_no_tamanho_minimo_com_zoom(monkeypatch, dialogos, zoom, tela, protecao):
+    """Com zoom de 125% e 150% (fontes maiores, margens iguais), nada fica cortado e a saída tem 4 linhas.
+
+    Vale com os textos mais longos do resumo: anti-bloqueio ou boost (que muda também o limite diário)."""
     try:
         tk.Tk().destroy()
     except tk.TclError:
@@ -303,7 +308,7 @@ def test_nada_cortado_no_tamanho_minimo_com_zoom(monkeypatch, dialogos, zoom, te
         criar_conta(nome)
     with closing(banco.conectar()) as conn:
         banco.salvar_configuracoes(conn, {"comentarios": '["Que publicação incrível, parabéns!", "Top", "Show"]',
-                                          "repetir": "sim", "seguir": "sim", "anti_bloqueio": "sim"})
+                                          "repetir": "sim", "seguir": "sim", protecao: "sim"})
         banco.registrar_pausa(conn, "Instagram", "@maria.aparecida_souza", "aviso", 24)
         banco.registrar_pausa(conn, "*", "*", "avisos em duas contas no mesmo dia", 48)
     planilhas.salvar_perfis({"instagram": ["https://www.instagram.com/fulano/", "https://www.instagram.com/p/AB1/"],
@@ -328,6 +333,7 @@ def test_nada_cortado_no_tamanho_minimo_com_zoom(monkeypatch, dialogos, zoom, te
         for _ in range(3):
             app.update()
         assert app.inicio.rotulo_pausas.winfo_manager() == "grid"
+        assert resumo(app)["Proteção"].startswith("boost" if protecao == "boost" else "anti-bloqueio")
         assert "todas as contas em todas as redes" in app.inicio.rotulo_pausas.cget("text")
         inicio = app.inicio
         assert inicio.winfo_y() + inicio.winfo_height() <= app.cadernos.winfo_height()  # nada passa da janela
@@ -340,3 +346,210 @@ def test_nada_cortado_no_tamanho_minimo_com_zoom(monkeypatch, dialogos, zoom, te
 def test_conftest_aponta_a_trava_da_janela_para_o_temporario(tmp_path):
     assert processo_interface.TRAVA_INTERFACE == tmp_path / "interface.trava"
     assert dados.OBSERVACAO_INVALIDO == "inválido: será ignorado"
+
+
+# ------------------------------------------------------------ modo boost
+
+def salvas():
+    with closing(banco.conectar()) as conn:
+        return banco.ler_configuracoes(conn)
+
+
+def test_modo_boost_salva_e_trava_o_limite_diario(janela, dialogos):
+    aba = janela.configuracoes
+    assert aba.vars["boost"].get() == "nao" and str(aba.spin_limite.cget("state")) == "normal"
+    assert aba.check_boost.cget("text") == "Modo boost (ignorar os tetos)"
+    aba.vars["limite_diario"].set("25")
+
+    aba.check_boost.invoke()
+    assert aba.vars["boost"].get() == "sim" and aba.vars["anti_bloqueio"].get() == "nao"
+    assert str(aba.spin_limite.cget("state")) == "disabled"
+    assert aba.vars["limite_diario"].get() == "25"  # travado, mas o valor fica
+    assert "ignorado no modo boost" in aba.dica_limite.cget("text")
+    assert aba.tem_alteracoes() and aba.salvar()
+    assert (salvas()["boost"], salvas()["anti_bloqueio"], salvas()["limite_diario"]) == ("sim", "nao", "25")
+
+    textos = resumo(janela)
+    assert textos["Proteção"].startswith("boost: sem tetos") and "risco" in textos["Proteção"]
+    assert textos["Limite diário"] == "ignorado no modo boost (salvo: 25 por conta, em cada rede)"
+    assert str(janela.inicio._rotulos_resumo["Proteção"].cget("style")) == "Aviso.TLabel"
+
+    aba.check_boost.invoke()
+    assert aba.vars["boost"].get() == "nao" and str(aba.spin_limite.cget("state")) == "normal"
+    assert aba.salvar() and salvas()["boost"] == "nao"
+    textos = resumo(janela)
+    assert (textos["Proteção"], textos["Limite diário"]) == ("normal", "25 publicações por conta, em cada rede")
+    assert str(janela.inicio._rotulos_resumo["Proteção"].cget("style")) == "TLabel"
+
+
+def test_boost_e_anti_bloqueio_se_desmarcam(janela):
+    aba = janela.configuracoes
+    marcados = lambda: (aba.vars["anti_bloqueio"].get(), aba.vars["boost"].get())  # noqa: E731
+    aba.check_anti_bloqueio.invoke()
+    assert marcados() == ("sim", "nao")
+    aba.check_boost.invoke()
+    assert marcados() == ("nao", "sim") and str(aba.spin_limite.cget("state")) == "disabled"
+    aba.check_anti_bloqueio.invoke()
+    assert marcados() == ("sim", "nao") and str(aba.spin_limite.cget("state")) == "normal"
+
+
+def test_configuracao_antiga_com_os_dois_ligados(janela):
+    """Os dois aparecem marcados como foram salvos; vale o anti-bloqueio (como na automação) até mexer num deles."""
+    with closing(banco.conectar()) as conn:
+        banco.salvar_configuracoes(conn, {"anti_bloqueio": "sim", "boost": "sim"})
+    aba = janela.configuracoes
+    aba.carregar()
+    janela.inicio.atualizar_resumo()
+    assert (aba.vars["anti_bloqueio"].get(), aba.vars["boost"].get()) == ("sim", "sim")
+    assert not aba.tem_alteracoes()
+    assert str(aba.spin_limite.cget("state")) == "normal"  # o limite vale no anti-bloqueio
+    assert resumo(janela)["Proteção"] == "anti-bloqueio (lento e cauteloso); o boost marcado fica sem efeito"
+
+    aba.check_anti_bloqueio.invoke()  # desmarcou o anti-bloqueio: sobra o boost
+    assert (aba.vars["anti_bloqueio"].get(), aba.vars["boost"].get()) == ("nao", "sim")
+    assert str(aba.spin_limite.cget("state")) == "disabled"
+    aba.check_anti_bloqueio.invoke()  # marcou de novo: desmarca o boost
+    assert (aba.vars["anti_bloqueio"].get(), aba.vars["boost"].get()) == ("sim", "nao")
+
+
+def test_boost_com_limite_invalido_volta_ao_salvo(janela):
+    """O campo trava no boost: um valor inválido nele impediria salvar, então volta ao último válido."""
+    aba = janela.configuracoes
+    aba.vars["limite_diario"].set("")
+    aba.check_boost.invoke()
+    assert aba.vars["limite_diario"].get() == banco.CONFIG_PADRAO["limite_diario"]
+    assert aba.salvar()
+
+
+# ------------------------------------------------------------ tetos por ação
+
+def tetos_na_tela(aba):
+    return {periodo: {chave: int(aba.vars_tetos[(periodo, chave)].get()) for chave, _ in aba_configuracoes.NOMES_TETOS}
+            for periodo in protecao.PERIODOS_TETO}
+
+
+def test_tetos_comecam_nas_sugestoes_e_salvam_so_o_que_mudou(janela, dialogos):
+    aba = janela.configuracoes
+    assert tuple(chave for chave, _ in aba_configuracoes.NOMES_TETOS) == protecao.CHAVES_TETO
+    assert tetos_na_tela(aba) == protecao.tetos_sugeridos() and not aba.tem_alteracoes()
+    assert resumo(janela)["Tetos"] == "sugeridos: até 30 ações/h e 200/dia no total, por conta e rede"
+
+    aba.vars_tetos[("por_hora", "curtir")].set("20")
+    aba.vars_tetos[("por_dia", "total")].set("150")
+    assert aba.tem_alteracoes() and aba.salvar()
+    salvos = json.loads(salvas()["tetos"])
+    esperado = protecao.tetos_sugeridos()
+    esperado["por_hora"]["curtir"], esperado["por_dia"]["total"] = 20, 150
+    assert salvos == esperado
+    assert resumo(janela)["Tetos"] == "personalizados: até 30 ações/h e 150/dia no total, por conta e rede"
+    aba.carregar()
+    assert aba.vars_tetos[("por_hora", "curtir")].get() == "20" and not aba.tem_alteracoes()
+
+    # "Restaurar sugestões" só preenche: vale depois de Salvar.
+    aba.botao_sugestoes.invoke()
+    assert tetos_na_tela(aba) == protecao.tetos_sugeridos() and aba.tem_alteracoes()
+    assert json.loads(salvas()["tetos"]) == esperado
+    assert aba.salvar() and salvas()["tetos"] == ""  # as sugestões ficam como vazio
+    assert not aba.tem_alteracoes()
+
+
+def test_teto_por_hora_maior_que_o_do_dia_nao_salva(janela, dialogos):
+    aba = janela.configuracoes
+    aba.vars_tetos[("por_hora", "comentar")].set("50")
+    aba.vars_tetos[("por_dia", "comentar")].set("10")
+    aba.vars_tetos[("por_dia", "seguir")].set("")
+    assert not aba.salvar()
+    assert dialogos.nomes() == ["showwarning"]
+    erros = aba.rotulo_erros.cget("text")
+    assert "O teto por hora de comentar (50) não pode ser maior que o do dia (10)." in erros
+    assert "seguir precisa ser um número" in erros
+    assert salvas()["tetos"] == ""
+
+
+def test_tetos_travados_no_boost(janela, dialogos):
+    aba = janela.configuracoes
+    aba.vars_tetos[("por_hora", "total")].set("25")
+    aba.vars_tetos[("por_dia", "favoritar")].set("")  # inválido: volta ao salvo, senão travaria o salvar
+    aba.check_boost.invoke()
+    assert all(str(spin.cget("state")) == "disabled" for spin in aba.spins_tetos)
+    assert str(aba.botao_sugestoes.cget("state")) == "disabled"
+    assert "Ignorados no modo boost" in aba.aviso_tetos.cget("text")
+    assert aba.vars_tetos[("por_hora", "total")].get() == str(protecao.tetos_sugeridos()["por_hora"]["total"])
+    assert aba.vars_tetos[("por_dia", "favoritar")].get() == str(protecao.tetos_sugeridos()["por_dia"]["favoritar"])
+    aba.vars_tetos[("por_hora", "total")].set("25")  # os valores ficam guardados no boost
+    assert aba.salvar()
+    assert resumo(janela)["Tetos"] == "ignorados (boost)"
+    assert str(janela.inicio._rotulos_resumo["Tetos"].cget("style")) == "Aviso.TLabel"
+    aba.check_boost.invoke()
+    assert all(str(spin.cget("state")) == "normal" for spin in aba.spins_tetos)
+    assert aba.vars_tetos[("por_hora", "total")].get() == "25"
+
+
+# ------------------------------------------------------------ emojis nos comentários
+
+def test_paleta_poe_o_emoji_onde_esta_o_cursor(janela):
+    aba = janela.configuracoes
+    entrada, paleta = aba.entrada_comentario, aba.paleta_emojis
+    assert len(paleta.botoes) == len(componentes.emojis_da_paleta()) >= 24
+    botao = {emoji: b for (emoji, _), b in zip(paleta.emojis, paleta.botoes, strict=True)}
+    aba.var_novo_comentario.set("Top demais")
+    entrada.icursor(3)
+    botao["🔥"].invoke()
+    assert aba.var_novo_comentario.get() == "Top🔥 demais"
+    entrada.icursor("end")
+    botao["🇧🇷"].invoke()
+    assert aba.var_novo_comentario.get() == "Top🔥 demais🇧🇷"
+    entrada.selection_range(0, 3)  # com texto selecionado, o emoji entra no lugar dele
+    botao["👏"].invoke()
+    assert aba.var_novo_comentario.get() == "👏🔥 demais🇧🇷"
+    botao["🔥"].event_generate("<Enter>")
+    assert paleta.dica.cget("text") == "fogo"
+    botao["🔥"].event_generate("<Leave>")
+    assert paleta.dica.cget("text") == componentes.DICA_PALETA
+
+
+def test_comentario_com_emojis_volta_igual_do_banco(janela, dialogos):
+    aba = janela.configuracoes
+    comentario = "Show 👏🏽🇧🇷 👨‍👩‍👧 ❤️"
+    aba.var_novo_comentario.set(comentario)
+    aba.adicionar_comentario()
+    assert aba.comentarios() == ["Boa!!!", comentario]
+    assert aba.salvar()
+    assert comum.comentarios_da_config(salvas()) == ["Boa!!!", comentario]
+    aba.carregar()
+    assert aba.lista_comentarios.get(1) == comentario and aba.comentarios()[1] == comentario
+    assert comentario in resumo(janela)["Comentários"]
+
+
+def test_editar_comentario_tem_a_paleta(janela, monkeypatch):
+    for nome in ("wait_visibility", "grab_set", "wait_window"):  # sem esperar ninguém clicar
+        monkeypatch.setattr(aba_configuracoes.simpledialog.Dialog, nome, lambda self, *a: None)
+    dialogo = aba_configuracoes.DialogoComentario("Editar comentário", "Comentário:", initialvalue="Top",
+                                                  parent=janela.configuracoes)
+    assert not dialogo.entry.selection_present()  # o texto não fica selecionado (o emoji não o apaga)
+    dialogo.paleta.botoes[0].invoke()
+    dialogo.ok()
+    assert dialogo.result == "Top" + componentes.emojis_da_paleta()[0][0]
+
+
+def test_paleta_no_tk_antigo_so_tem_simbolos_do_plano_basico(janela):
+    """No Tk 8.6, os emojis fora do plano básico do Unicode saem errados: a paleta não os oferece."""
+    assert componentes.emojis_da_paleta(8.6) == componentes.EMOJIS_BASICOS
+    assert componentes.emojis_da_paleta(9.0) == componentes.EMOJIS
+    assert all(ord(letra) <= 0xFFFF for emoji, _ in componentes.EMOJIS_BASICOS for letra in emoji)
+    assert len(componentes.EMOJIS_BASICOS) >= 24
+    quadro = ttk.Frame(janela)
+    entrada = ttk.Entry(quadro)
+    paleta = componentes.PaletaEmojis(quadro, alvo=entrada, versao_tk=8.6)
+    assert [botao.cget("text") for botao in paleta.botoes] == [emoji for emoji, _ in componentes.EMOJIS_BASICOS]
+    paleta.botoes[0].invoke()
+    assert entrada.get() == "❤"
+    quadro.destroy()
+
+
+def test_todo_emoji_da_paleta_tem_imagem():
+    """Os botões usam imagens: o Tk de alguns Pythons não desenha emojis com as fontes do sistema."""
+    for emoji, _nome in componentes.EMOJIS + componentes.EMOJIS_BASICOS:
+        assert (componentes.PASTA_EMOJIS / componentes.arquivo_do_emoji(emoji)).is_file(), emoji
+    assert componentes.arquivo_do_emoji("🇧🇷") == "1f1e7-1f1f7.png"
+    assert componentes.arquivo_do_emoji("❤️") == "2764-fe0f.png"

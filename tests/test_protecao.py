@@ -78,13 +78,34 @@ def test_acao_que_nao_clica_nao_e_controlada(conn):
     assert espera.vezes == []
 
 
-def test_teto_por_hora_espera_a_mais_antiga_sair_da_janela(conn):
+def test_teto_por_hora_do_tipo_longe_de_liberar_pula_a_acao(conn):
+    """Não para a rede inteira por quase uma hora: só aquela ação fica para a próxima volta."""
     espera = Espera()
     for minutos in range(1, 16):              # 15 curtidas na última hora (teto normal: 15)
         gravar(conn, "curtir", minutos)
+    with pytest.raises(PularAcao, match="teto por hora de curtir"):
+        ritmo(conn, PROTECAO_NORMAL, "curtir", espera)   # liberaria só daqui a ~45 min
+    assert espera.vezes == []
+    ritmo(conn, PROTECAO_NORMAL, "comentar", espera)     # os outros tipos seguem normalmente
+    assert espera.vezes == []
+
+
+def test_teto_por_hora_do_tipo_perto_de_liberar_espera(conn):
+    espera = Espera()
+    gravar(conn, "curtir", 58)                # a mais antiga sai da janela em 2 min
+    for minutos in range(1, 15):
+        gravar(conn, "curtir", minutos)
     ritmo(conn, PROTECAO_NORMAL, "curtir", espera)
-    # a 15ª mais recente foi há 15 min: espera ~45 min (+30 s de folga sorteada)
-    assert espera.vezes == [pytest.approx(45 * 60 + 30)]
+    assert espera.vezes == [pytest.approx(2 * 60 + 30)]  # +30 s de folga sorteada
+
+
+def test_teto_total_por_hora_espera_a_mais_antiga_sair_da_janela(conn):
+    espera = Espera()
+    for minutos in range(1, 31):              # 30 ações na última hora (teto total normal: 30)
+        gravar(conn, ["curtir", "favoritar"][minutos % 2], minutos)
+    ritmo(conn, PROTECAO_NORMAL, "comentar", espera)
+    # a 30ª mais recente foi há 30 min: espera ~30 min (+30 s de folga sorteada)
+    assert espera.vezes == [pytest.approx(30 * 60 + 30)]
 
 
 def test_marca_antes_do_clique_e_confirmacao_contam_uma_vez(conn):
@@ -224,7 +245,7 @@ def test_limite_de_publicacoes_por_perfil_alvo_no_dia(conn, sem_espera):
 
 
 def test_um_comentario_por_perfil_alvo_na_semana(conn, sem_espera, monkeypatch):
-    monkeypatch.setattr(comum, "_ultimo_comentario", None)
+    monkeypatch.setattr(comum._linha, "ultimo_comentario", None)
     comentarios = []
 
     def comentar(pg, c, pub):
@@ -242,7 +263,7 @@ def test_um_comentario_por_perfil_alvo_na_semana(conn, sem_espera, monkeypatch):
 
 
 def test_comentario_nao_se_repete_na_semana(conn, sem_espera, monkeypatch):
-    monkeypatch.setattr(comum, "_ultimo_comentario", None)
+    monkeypatch.setattr(comum._linha, "ultimo_comentario", None)
     gravar(conn, "comentar", 600, alvo="antigo1", detalhe="Boa!!!")
     gravar(conn, "comentar", 500, alvo="antigo2", detalhe="Top (nenhum comentário seu entre os 3 carregados)")
     textos = []

@@ -128,8 +128,9 @@ def test_horario_e_rechecado_depois_de_uma_espera(conn, monkeypatch):
     protecao.reiniciar_estado()
     monkeypatch.setattr(protecao.random, "uniform", lambda a, b: a)
     monkeypatch.setattr(protecao.random, "randint", lambda a, b: a)
-    agora = datetime(2026, 10, 23, 21, 55).astimezone()
-    for minutos in range(1, PROTECAO_ANTI_BLOQUEIO.por_hora["curtir"] + 1):
+    # Teto por hora de curtir que libera em 3 min (espera curta: espera em vez de pular).
+    agora = datetime(2026, 10, 23, 21, 58).astimezone()
+    for minutos in range(50, 50 + PROTECAO_ANTI_BLOQUEIO.por_hora["curtir"]):
         pub_id = banco.registrar_publicacao(conn, "Instagram", f"P{minutos}", "a", "posts", 1, "u")
         conn.execute("INSERT INTO acoes (publicacao_id, acao, status, registrado_em, conta) "
                      "VALUES (?, 'curtir', 'feito', ?, '@ana')",

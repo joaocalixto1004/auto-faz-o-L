@@ -3,8 +3,9 @@
 Programa de janela que visita perfis do **Instagram** e do **TikTok** num Google Chrome visível e,
 em cada publicação, curte, reposta ou favorita, comenta, compartilha por mensagem e copia o link,
 no ritmo de uma pessoa. Também pode seguir os perfis da lista, ver os stories e recomeçar a lista
-sozinho de tempos em tempos. Funciona com várias contas, uma depois da outra. Tudo o que ele faz
-fica gravado num banco local, para nunca repetir as próprias ações.
+sozinho de tempos em tempos. Com as duas redes escolhidas, o Instagram e o TikTok trabalham **ao
+mesmo tempo**, cada um na sua janela. Funciona com várias contas, uma depois da outra. Tudo o que
+ele faz fica gravado num banco local, para nunca repetir as próprias ações.
 
 - [Para quem só quer usar](#para-quem-só-quer-usar)
 - [Para quem desenvolve](#para-quem-desenvolve)
@@ -81,7 +82,8 @@ meio atrapalharia a execução).
 **Início**
 
 - **Contas**: se cada rede está logada, qual conta e quando foi verificada.
-- **Configuração atual**: o resumo do que a automação vai fazer, com atalhos para editar.
+- **Configuração atual**: o resumo do que a automação vai fazer (inclusive a proteção e os tetos),
+  com atalhos para editar.
 - **Conta** e **Fazer login / verificar contas**: abre o navegador da conta escolhida para logar
   ou só conferir.
 - **Iniciar automação**: começa a visitar os perfis da planilha com todas as contas ativas. Se
@@ -102,21 +104,27 @@ Só uma coisa roda por vez (login ou automação), porque as duas usam os mesmos
 Também só abre uma janela do programa por vez: clicar no ícone de novo só avisa que ela já está
 aberta. Se uma conta estiver em pausa por aviso da rede, a aba Início mostra até quando.
 
+**Com as duas redes escolhidas, o Chrome abre duas janelas**: o Instagram na de sempre e o
+TikTok numa janela própria, trabalhando ao mesmo tempo (deixe as duas visíveis, lado a lado, se
+quiser acompanhar). No log, cada linha começa com `[Instagram]` ou `[TikTok]`. A conta só passa
+para a próxima quando as duas redes terminam a lista.
+
 **Se a janela do navegador for fechada, ela reabre sozinha** em alguns segundos, e a automação
-continua de onde parou. Para encerrar de verdade, use sempre o **Parar**. Fechar a janela do
+continua de onde parou. Se só a janela de uma das redes for fechada, só ela reabre. Para encerrar de verdade, use sempre o **Parar**. Fechar a janela do
 programa com algo rodando pede confirmação e também para tudo.
 
 **Contas**: veja [Várias contas](#3-várias-contas).
 
 **Configurações** (valem para todas as contas ativas)
 
-- **Em quais redes agir**: só Instagram, só TikTok ou as duas. Os logins continuam guardados; os
-  perfis da planilha das outras redes são pulados.
+- **Em quais redes agir**: só Instagram, só TikTok ou as duas (ao mesmo tempo, cada uma na sua
+  janela). Os logins continuam guardados; os perfis da planilha das outras redes são pulados.
 - **Quais publicações**: as N primeiras de cada aba do perfil (1 a 50) ou as das últimas X
   semanas (1 a 52; posts fixados antigos ficam de fora). Só o número do modo escolhido precisa
   estar preenchido.
-- **Comentários**: uma lista (até 50, de até 300 letras). A cada publicação o programa sorteia
-  um, sem repetir o da publicação anterior.
+- **Comentários**: uma lista (até 50, de até 300 letras), com emojis se quiser (há uma paleta ao
+  lado do campo). A cada publicação o programa sorteia um, sem repetir o da publicação anterior.
+  O emoji é digitado inteiro, de uma vez, como pelo seletor do celular.
 - **Compartilhar com**: uma conta do Instagram de reserva, usada só quando a planilha de
   compartilhamento não tem ninguém na aba do Instagram. Pode ficar vazia.
 - **Ações extras e repetição** (todas começam desligadas, menos a última):
@@ -131,8 +139,18 @@ programa com algo rodando pede confirmação e também para tudo.
 - **Limite diário**: o máximo de publicações trabalhadas **por conta e por rede**, por dia (1 a
   500; o padrão é 40). Volume baixo é o que mais ajuda a evitar bloqueios. Quando o limite chega,
   aquela conta para de agir naquela rede até o dia seguinte.
+- **Tetos por ação**: quantas curtidas, comentários, compartilhamentos, reposts, favoritos e
+  seguidas (e quantas ações no total) cada conta faz por hora e por dia, em cada rede. Já vêm com
+  as sugestões da tabela abaixo; **Restaurar sugestões** volta a elas. Com a proteção
+  anti-bloqueio, vale o menor entre o que você escolheu e o do modo. Quando um tipo de ação chega
+  no teto da hora, só aquela ação fica para a próxima volta (o programa não para por causa dela);
+  quando o total da hora chega, aquela rede espera.
 - **Proteção anti-bloqueio**: deixa a automação bem mais lenta e cautelosa (veja a tabela abaixo).
   Recomendada para contas novas ou que já receberam aviso.
+- **Modo boost (ignorar os tetos)**: vai sem os tetos por hora e por dia, sem o limite diário, sem
+  o intervalo entre comentários e sem as pausas longas. Continua assistindo os vídeos até o fim,
+  com as pausas curtas, sem desfazer curtidas/reposts e parando se a rede avisar. **Aumenta
+  bastante o risco de bloqueio da conta.** Marcar o boost desmarca o anti-bloqueio, e vice-versa.
 
 Nada muda até clicar em **Salvar**. **Restaurar padrões** só preenche o formulário.
 
@@ -147,15 +165,15 @@ As duas planilhas da pasta `data/`, com uma aba para o Instagram e outra para o 
 
 Dá para colar vários de uma vez, separados por espaço ou por linha (uma vírgula também separa
 quando outro link vem logo depois). Repetidos e links da rede errada são recusados. Se a planilha
-tiver links inválidos, eles são ignorados e a janela pergunta antes de iniciar. O arquivo só muda ao clicar em **Salvar planilha**; feche a planilha
-no Excel ou no LibreOffice antes de salvar. Anotações que você puser em outras colunas continuam
+tiver links inválidos, eles são ignorados e a janela pergunta antes de iniciar. O arquivo só muda
+ao clicar em **Salvar planilha**; feche a planilha no Excel ou no LibreOffice antes de salvar. Anotações que você puser em outras colunas continuam
 na linha do seu perfil.
 
 ### 5. O que o programa faz (e o que nunca faz)
 
 | Rede | Abas do perfil | Ações em cada publicação | Extras (se ligados) |
 |------|----------------|--------------------------|---------------------|
-| Instagram | Posts e Reposts | curtir, repostar, comentar, compartilhar com cada conta da planilha, copiar o link | seguir, ver e curtir stories |
+| Instagram | Posts, Reels e Reposts | curtir, repostar, comentar, compartilhar com cada conta da planilha, copiar o link | seguir, ver e curtir stories |
 | TikTok | Vídeos e Republicações | curtir, comentar, adicionar aos favoritos, compartilhar com cada conta da planilha, copiar o link | seguir |
 
 Regras de segurança:
@@ -178,18 +196,22 @@ Regras de segurança:
   as fotos são olhadas com calma. Isso reduz o risco, mas **não garante** que a rede não bloqueie
   a conta: os termos de uso do Instagram e do TikTok proíbem automação em qualquer ritmo.
 
-Os limites de cada modo, por conta e por rede:
+Os limites de cada modo, por conta e por rede (no normal, os tetos são as sugestões, que você
+pode mudar em **Tetos por ação**):
 
-| | Normal | Anti-bloqueio |
-|---|---|---|
-| Ações por hora (total) | 30 | 15 |
-| Ações por dia (total) | 200 | 80 |
-| Comentários por hora / por dia | 5 / 30 | 2 / 8 |
-| Intervalo mínimo entre comentários | 3 min | 15 min |
-| Pausa longa | 10 a 20 min a cada 20 a 30 ações | 30 a 60 min a cada 10 a 15 ações |
-| Horário | qualquer | só das 9h às 22h, com descanso a cada 25 min |
-| Mesmo perfil-alvo | sem limite | até 2 publicações por dia, 1 comentário por semana |
-| Depois de um aviso da rede | pausa de 24 h | pausa de 48 h; aviso em 2 contas no dia para todas por 24 h |
+| | Normal | Anti-bloqueio | Boost |
+|---|---|---|---|
+| Ações por hora (total) | 30 | 15 | sem teto |
+| Ações por dia (total) | 200 | 80 | sem teto |
+| Curtidas por hora / por dia | 15 / 120 | 8 / 50 | sem teto |
+| Comentários por hora / por dia | 5 / 30 | 2 / 8 | sem teto |
+| Reposts por hora / por dia | 4 / 15 | 1 / 5 | sem teto |
+| Intervalo mínimo entre comentários | 3 min | 15 min | nenhum |
+| Pausa entre publicações | 10 a 30 s | 2 a 6 min | 10 a 30 s |
+| Pausa longa | 10 a 20 min a cada 20 a 30 ações | 30 a 60 min a cada 10 a 15 ações | nenhuma |
+| Horário | qualquer | só das 9h às 22h, com descanso a cada 25 min | qualquer |
+| Mesmo perfil-alvo | sem limite | até 2 publicações por dia, 1 comentário por semana | sem limite |
+| Depois de um aviso da rede | pausa de 24 h | pausa de 48 h; aviso em 2 contas no dia para todas por 24 h | pausa de 24 h |
 
 Quando uma ação falha, um print da tela vai para `capturas/`, para ajudar a entender o erro.
 
@@ -227,12 +249,14 @@ Quando uma ação falha, um print da tela vai para `capturas/`, para ajudar a en
 │       ├── aba_contas.py
 │       ├── aba_configuracoes.py
 │       ├── aba_planilhas.py
-│       ├── componentes.py peças de Tkinter usadas por mais de uma aba
+│       ├── componentes.py peças de Tkinter usadas por mais de uma aba (e a paleta de emojis)
+│       ├── emojis/        imagens dos botões da paleta (emojis/gerar.py refaz)
 │       ├── dados.py       o que as abas mostram, sem Tkinter
 │       └── processo.py    roda o login e a automação em segundo plano
 ├── tests/
 └── docs/
     ├── adr/0001-estrutura-em-pacote.md
+    ├── adr/0002-redes-em-paralelo.md
     └── exemplos/perfis.txt   exemplo para a opção --arquivo
 ```
 
@@ -272,8 +296,10 @@ Sempre na raiz do projeto, com o Python do `.venv`:
 
 As opções `--quantidade`, `--semanas`, `--comentario` (repetível), `--compartilhar-com`,
 `--limite-diario`, `--planilha`, `--planilha-compartilhar`, `--redes`, `--perfil` (repetível),
-`--anti-bloqueio`, `--seguir`, `--ver-stories` e `--repetir MINUTOS` / `--sem-repetir` do
-`interagir` têm prioridade sobre o que está salvo no banco. Veja `--help` de cada módulo.
+`--anti-bloqueio`, `--boost`, `--seguir`, `--ver-stories` e `--repetir MINUTOS` / `--sem-repetir`
+do `interagir` têm prioridade sobre o que está salvo no banco. `--uma-rede-por-vez` desliga o
+modo paralelo (as duas redes numa janela só, uma depois da outra), o que também acontece com
+`--trace`. Veja `--help` de cada módulo.
 
 ### Testes
 
@@ -307,6 +333,17 @@ execução dos `.sh`) e se o `requirements.txt` está igual ao `pyproject.toml`.
 - **Navegador.** `abrir_redes.abrir_navegador` abre o Chrome (`channel="chrome"`) com o perfil
   persistente; sem Chrome, cai para o Chromium do Playwright. O login é detectado pelo cookie
   `sessionid`. Se a janela fecha, os dois scripts reabrem o navegador (a não ser com `--sem-reabrir`).
+- **Duas redes ao mesmo tempo.** Com Instagram e TikTok escolhidos, o Chrome abre com
+  `--remote-debugging-port=0` (porta sorteada, só em 127.0.0.1, enquanto a automação roda) e
+  `interagir.processar_em_paralelo` divide a lista por rede. O Instagram segue na linha de
+  execução principal; o TikTok roda noutra (`threading`), com a sua própria instância do
+  Playwright conectada ao mesmo Chrome (`connect_over_cdp`, já que a API síncrona não pode ser
+  usada por duas linhas) e a sua conexão ao SQLite, numa **janela** própria (uma aba no fundo
+  fica "escondida" para o site, que pausa o vídeo). O marcador antes do clique e a memória do
+  último comentário são por linha de execução (`comum._linha`), e `terminal.SaidaComRotulos`
+  junta cada linha do log inteira com `[Rede]` na frente. O Parar vira `KeyboardInterrupt` na
+  linha principal, que liga `terminal.PARADA` para a outra parar na próxima espera. O porquê está
+  em [docs/adr/0002-redes-em-paralelo.md](docs/adr/0002-redes-em-paralelo.md).
 - **Motor.** `interagir` lê os perfis e a configuração e chama `processar_perfil` do módulo da
   rede (`MODULOS`). Cada rede lê a grade do perfil (`comum.coletar_da_grade`) e passa cada
   publicação a `comum.processar_publicacao`, que pula as ações já concluídas no banco, respeita o
@@ -314,8 +351,12 @@ execução dos `.sh`) e se o `requirements.txt` está igual ao `pyproject.toml`.
   `Resultado` (`feito`, `ja_estava_feito` ou `simulado`), ou levanta `NaoConfirmado` ou `Bloqueio`.
 - **Proteção.** Antes de cada clique, `protecao.controlar_ritmo` aplica o horário, os tetos por
   hora e por dia (contados no banco), o intervalo entre comentários e as pausas longas; se não
-  der para agir, levanta `PularAcao` (a ação fica para outra vez) ou `LimiteDiario`. Um aviso da
-  rede vira uma linha na tabela `pausas`, conferida no início de cada perfil.
+  der para agir, levanta `PularAcao` (a ação fica para outra vez) ou `LimiteDiario`. Um teto por
+  hora de um tipo que só libera daqui a mais de `ESPERA_MAXIMA_TETO_DO_TIPO_S` pula a ação em vez
+  de esperar. Os modos são `PROTECAO_NORMAL`, `PROTECAO_ANTI_BLOQUEIO` e `PROTECAO_BOOST`
+  (`sem_tetos`); `protecao_da_config` aplica os tetos escolhidos na interface (configuração
+  `tetos`, em JSON, conferida por `validar_tetos`). Um aviso da rede vira uma linha na tabela
+  `pausas`, conferida no início de cada perfil.
 - **Banco.** SQLite em modo WAL. Para mudar o esquema, **acrescente** um item no fim de
   `banco.MIGRACOES`; nunca altere nem reordene os existentes (o banco aplica as que faltam pelo
   `PRAGMA user_version`).

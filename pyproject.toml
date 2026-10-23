@@ -1,6 +1,6 @@
 [project]
 name = "automacao-redes-sociais"
-version = "1.0.0"
+version = "1.1.0"
 description = "Interações no Instagram e no TikTok num Google Chrome visível, com banco SQLite e interface gráfica em Tkinter."
 readme = "README.md"
 requires-python = ">=3.11"

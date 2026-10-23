@@ -136,7 +136,8 @@ def test_resumo_configuracao():
         "Comentários": "1 comentário: “Boa!!!”",
         "Ações extras": "Seguir: não · Stories: não · Recomeçar: não · Conta sem login: pula",
         "Limite diário": "40 publicações por conta, em cada rede",  # o limite é por conta
-        "Proteção anti-bloqueio": "desligada",
+        "Tetos": "sugeridos: até 30 ações/h e 200/dia no total, por conta e rede",
+        "Proteção": "normal",
     }
     valores.update(modo="tempo", semanas="4")
     assert dict(dados.resumo_configuracao(valores))["Publicações"].startswith("as das últimas 4 semana(s)")
@@ -366,3 +367,71 @@ def test_texto_das_pausas_do_banco(conn):
     banco.registrar_pausa(conn, "Instagram", "@Fulano", "Tente novamente mais tarde", 24)
     texto = dados.texto_pausas(banco.pausas_ativas(conn))
     assert texto.startswith("Em pausa por aviso da rede: @fulano no Instagram até ")
+
+
+# ------------------------------------------------------------ modo boost e saída em paralelo
+
+@pytest.mark.parametrize(("anti", "boost", "modo", "texto"), [
+    ("nao", "nao", "normal", "normal"),
+    ("sim", "nao", "anti_bloqueio", "anti-bloqueio (lento e cauteloso)"),
+    ("nao", "sim", "boost", "boost: sem tetos por hora e por dia nem limite diário ⚠ mais risco de bloqueio"),
+    ("sim", "sim", "anti_bloqueio", "anti-bloqueio (lento e cauteloso); o boost marcado fica sem efeito"),
+])
+def test_resumo_da_protecao_como_a_automacao_decide(anti, boost, modo, texto):
+    from automacao.redes import protecao
+    valores = dict(banco.CONFIG_PADRAO, anti_bloqueio=anti, boost=boost, limite_diario="40")
+    assert dados.modo_protecao(valores) == modo == protecao.protecao_da_config(valores).nome
+    resumo = dict(dados.resumo_configuracao(valores))
+    assert resumo["Proteção"] == texto
+    assert resumo["Limite diário"] == ("ignorado no modo boost (salvo: 40 por conta, em cada rede)" if modo == "boost"
+                                       else "40 publicações por conta, em cada rede")
+
+
+@pytest.mark.parametrize("linha", [
+    "[TikTok]     curtir        feito",
+    "[Instagram] @perfil: abrindo...",
+    "[Instagram] Posts: 3 publicações",
+    "[TikTok] @perfil posts #1 (ABC): curtir=feito comentar=feito",
+])
+def test_linhas_com_o_nome_da_rede_na_frente_nao_mexem_nas_contas(linha):
+    """Com as duas redes ao mesmo tempo, a automação põe "[Rede] " na frente das linhas."""
+    assert dados.interpretar_linha(linha) == []
+    assert dados.perfil_da_linha(linha) is None and dados.espera_recomeco(linha) is None
+    assert dados.estilo_da_linha(linha) is None
+    contas = [dados.SituacaoConta(1, "Principal")]
+    assert dados.tratar_linha_de_contas(contas, 1, linha) == (1, False)
+    assert contas[0].logins == {}
+
+
+@pytest.mark.parametrize(("linha", "estilo"), [
+    ("[TikTok] Aviso: a página não carregou direito", "aviso"),
+    ("[Instagram] Erro inesperado em @x: Timeout. Seguindo para o próximo perfil.", "erro"),
+    ("[TikTok] ✔ comentário publicado", "ok"),
+])
+def test_cor_das_linhas_com_o_nome_da_rede_na_frente(linha, estilo):
+    assert dados.estilo_da_linha(linha) == estilo
+
+
+# ------------------------------------------------------------ tetos por ação no resumo
+
+def _tetos(**por_hora):
+    import json
+    from automacao.redes import protecao
+    tetos = protecao.tetos_sugeridos()
+    tetos["por_hora"].update(por_hora)
+    return json.dumps(tetos)
+
+
+@pytest.mark.parametrize(("extra", "texto"), [
+    ({}, "sugeridos: até 30 ações/h e 200/dia no total, por conta e rede"),
+    ({"tetos": _tetos(total=12)}, "personalizados: até 12 ações/h e 200/dia no total, por conta e rede"),
+    ({"anti_bloqueio": "sim"}, "sugeridos, no limite do anti-bloqueio: até 15 ações/h e 80/dia no total, por conta e rede"),
+    ({"anti_bloqueio": "sim", "tetos": _tetos(total=10)},
+     "personalizados, no limite do anti-bloqueio: até 10 ações/h e 80/dia no total, por conta e rede"),
+    ({"boost": "sim", "tetos": _tetos(total=10)}, "ignorados (boost)"),
+    ({"tetos": "{estragado"}, "sugeridos: até 30 ações/h e 200/dia no total, por conta e rede"),
+])
+def test_resumo_dos_tetos(extra, texto):
+    valores = dict(banco.CONFIG_PADRAO, **extra)
+    assert dados.texto_tetos(valores) == texto
+    assert dict(dados.resumo_configuracao(valores))["Tetos"] == texto

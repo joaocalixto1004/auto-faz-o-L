@@ -11,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from playwright.sync_api import Locator, Page
 from automacao import banco
 from automacao.abrir_redes import NavegadorFechado
 from automacao.caminhos import PASTA_CAPTURAS
-from automacao.terminal import dormir
+from automacao.terminal import PARADA, dormir
 from automacao.redes.protecao import (PROTECAO_NORMAL, Bloqueio, LimiteDiario, Protecao, PularAcao,
                                       controlar_ritmo, tipo_da_acao)
 
@@ -116,10 +117,20 @@ def comentarios_da_config(salvas: dict[str, str]) -> list[str]:
 
 
 _sorteio = random.SystemRandom()      # usa a aleatoriedade do sistema operacional
-_ultimo_comentario: str | None = None
 
 
-_textos_evitar: set[str] = set()  # comentários usados recentemente pela conta (anti-bloqueio)
+class _EstadoDaLinha(threading.local):
+    """O que cada linha de execução guarda só para si.
+
+    Com as duas redes ao mesmo tempo, o Instagram e o TikTok rodam em linhas
+    separadas: o marcador antes do clique de uma não pode valer para a outra.
+    """
+    ao_clicar: Callable[[], None] | None = None   # grava o "nao_confirmado" da ação em curso
+    ultimo_comentario: str | None = None
+    textos_evitar: frozenset[str] = frozenset()    # comentados recentemente pela conta (anti-bloqueio)
+
+
+_linha = _EstadoDaLinha()
 
 
 def sortear_comentario(cfg: "Config") -> str:
@@ -128,15 +139,14 @@ def sortear_comentario(cfg: "Config") -> str:
     No modo anti-bloqueio, também não usa os textos que a conta comentou nos
     últimos dias; se todos já foram usados, o comentário fica para depois.
     """
-    global _ultimo_comentario
-    opcoes = [c for c in dict.fromkeys(cfg.comentarios or [cfg.comentario]) if c not in _textos_evitar]
+    opcoes = [c for c in dict.fromkeys(cfg.comentarios or [cfg.comentario]) if c not in _linha.textos_evitar]
     if not opcoes:
         raise PularAcao("todos os comentários da lista já foram usados por esta conta nos últimos "
                         f"{cfg.protecao.comentario_repetido_dias} dias; cadastre mais variações")
-    if len(opcoes) > 1 and _ultimo_comentario in opcoes:
-        opcoes.remove(_ultimo_comentario)
-    _ultimo_comentario = _sorteio.choice(opcoes)
-    return _ultimo_comentario
+    if len(opcoes) > 1 and _linha.ultimo_comentario in opcoes:
+        opcoes.remove(_linha.ultimo_comentario)
+    _linha.ultimo_comentario = _sorteio.choice(opcoes)
+    return _linha.ultimo_comentario
 
 
 # Uma ação recebe a aba do navegador, a configuração e a publicação.
@@ -176,10 +186,45 @@ def clicar(pg: Page, alvo: Locator, timeout: int = 10_000,
     alvo.click(position={"x": rx, "y": ry}, delay=random.randint(50, 120), timeout=timeout)
 
 
-def digitar(pg: Page, texto: str) -> None:
-    """Digita letra a letra, com intervalo variável, no campo que estiver em foco."""
+# Caracteres que se juntam ao anterior num emoji: ligação (ZWJ), variação de
+# estilo, tecla (1️⃣) e marcas de bandeira de subdivisão.
+_JUNTA_AO_ANTERIOR = {"\u200d", "\ufe0e", "\ufe0f", "\u20e3"}
+
+
+def _bandeira(letra: str) -> bool:
+    return 0x1F1E6 <= ord(letra[-1]) <= 0x1F1FF   # símbolos regionais (🇧 + 🇷 = 🇧🇷)
+
+
+def partes_para_digitar(texto: str) -> list[str]:
+    """Divide o texto em letras, mantendo cada emoji composto inteiro (👍🏽, 👨‍👩‍👧, 🇧🇷, 1️⃣)."""
+    partes: list[str] = []
+    depois_de_ligacao = False
     for letra in texto:
-        pg.keyboard.type(letra)
+        codigo = ord(letra)
+        junta = (depois_de_ligacao or letra in _JUNTA_AO_ANTERIOR
+                 or 0x1F3FB <= codigo <= 0x1F3FF          # tons de pele
+                 or 0xE0020 <= codigo <= 0xE007F)         # bandeiras de subdivisão
+        if not junta and partes and _bandeira(letra) and len(partes[-1]) == 1 and _bandeira(partes[-1]):
+            junta = True                                  # segundo símbolo de uma bandeira
+        if partes and junta:
+            partes[-1] += letra
+        else:
+            partes.append(letra)
+        depois_de_ligacao = letra == "\u200d"
+    return partes
+
+
+def digitar(pg: Page, texto: str) -> None:
+    """Digita letra a letra, com intervalo variável, no campo que estiver em foco.
+
+    Um emoji entra inteiro de uma vez (como pelo seletor de emojis do
+    celular): digitado aos pedaços, um emoji composto pode chegar quebrado.
+    """
+    for parte in partes_para_digitar(texto):
+        if len(parte) > 1 or ord(parte) > 0xFFFF:
+            pg.keyboard.insert_text(parte)
+        else:
+            pg.keyboard.type(parte)
         time.sleep(random.uniform(*DIGITACAO_POR_LETRA))
     time.sleep(random.uniform(0.4, 1.0))
 
@@ -203,6 +248,8 @@ def esperar_ate(condicao: Callable[[], bool], timeout_s: float, intervalo: float
                 return True
         except PlaywrightError:
             pass
+        if PARADA.is_set():  # Parar: a outra rede (em paralelo) também precisa parar já
+            raise KeyboardInterrupt
         time.sleep(intervalo)
     return False
 
@@ -268,9 +315,6 @@ def ler_clipboard(pagina: Page) -> str | None:
 
 # ------------------------------------------------------ cliques que mudam algo
 
-_ao_clicar: Callable[[], None] | None = None
-
-
 def antes_de_clicar() -> None:
     """Chamar imediatamente antes de um clique que muda algo na rede.
 
@@ -279,8 +323,8 @@ def antes_de_clicar() -> None:
     a ação já conta como feita e nunca é repetida. No TikTok, também confere
     que o vídeo na tela ainda é o certo.
     """
-    if _ao_clicar:
-        _ao_clicar()
+    if _linha.ao_clicar:
+        _linha.ao_clicar()
 
 
 # ------------------------------------------------------------------ vídeos
@@ -367,6 +411,8 @@ def esperar_fim_do_video(pg: Page, token: str) -> None:
     print(f"    vídeo         aguardando terminar (~{restante:.0f}s)")
     limite = time.monotonic() + min(restante + 30, VIDEO_ESPERA_MAXIMA_S)
     while time.monotonic() < limite:
+        if PARADA.is_set():
+            raise KeyboardInterrupt
         time.sleep(1)
         try:
             estado = pg.evaluate(JS_ESTADO_VIDEO, token)
@@ -498,6 +544,7 @@ def processar_publicacao(conn: sqlite3.Connection, pagina: Page, rodada_id: int 
     # O limite conta publicações novas do dia: retomar uma que já foi trabalhada
     # hoje (para refazer uma ação que falhou) não aumenta o total.
     if (not cfg.simular and not _trabalhada_hoje(conn, pub.rede, pub.codigo, conta)
+            and not cfg.protecao.sem_tetos
             and banco.publicacoes_trabalhadas_hoje(conn, pub.rede, conta) >= cfg.limite_diario):
         raise LimiteDiario(f"limite diário de {cfg.limite_diario} publicações atingido"
                            + (f" para {conta}" if conta else ""))
@@ -512,9 +559,9 @@ def processar_publicacao(conn: sqlite3.Connection, pagina: Page, rodada_id: int 
         linha.acoes = {"perfil-alvo": "limite do dia"}
         return
 
-    global _textos_evitar
-    _textos_evitar = (banco.textos_comentados(conn, conta, protecao.comentario_repetido_dias, pub.rede)
-                      if protecao.comentario_repetido_dias and not cfg.simular else set())
+    _linha.textos_evitar = frozenset(
+        banco.textos_comentados(conn, conta, protecao.comentario_repetido_dias, pub.rede)
+        if protecao.comentario_repetido_dias and not cfg.simular else ())
 
     print(f"{rotulo}: abrindo ({len(pendentes)} ações pendentes)")
     try:
@@ -545,7 +592,6 @@ def processar_publicacao(conn: sqlite3.Connection, pagina: Page, rodada_id: int 
         publicacao_id = banco.registrar_publicacao(conn, pub.rede, pub.codigo, pub.perfil, pub.aba,
                                                    pub.posicao, pub.url, publicada_em)
 
-    global _ao_clicar
     try:
         for nome, fn in pendentes:
             marcado = {"sim": False}
@@ -559,7 +605,7 @@ def processar_publicacao(conn: sqlite3.Connection, pagina: Page, rodada_id: int 
                                          alvo=pub.perfil)
                 marcado["sim"] = True
 
-            _ao_clicar = None if cfg.simular else marcar
+            _linha.ao_clicar = None if cfg.simular else marcar
             try:
                 if not cfg.simular:
                     if (tipo_da_acao(nome) == "comentar" and protecao.comentario_por_alvo_dias
@@ -572,7 +618,7 @@ def processar_publicacao(conn: sqlite3.Connection, pagina: Page, rodada_id: int 
             except PularAcao as erro:
                 status, detalhe, link = "pulado", str(erro), None
             finally:
-                _ao_clicar = None
+                _linha.ao_clicar = None
             if status == "falhou" and marcado["sim"]:
                 status = "nao_confirmado"  # o clique já foi enviado: nunca repetir
             linha.acoes[nome] = status

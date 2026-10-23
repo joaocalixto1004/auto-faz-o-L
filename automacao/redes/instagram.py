@@ -26,7 +26,7 @@ from automacao.redes.protecao import PularAcao, controlar_ritmo
 
 REDE = "Instagram"
 BASE = "https://www.instagram.com"
-ABAS = (("posts", ""), ("reposts", "reposts/"))  # (nome, sufixo da URL do perfil)
+ABAS = (("posts", ""), ("reels", "reels/"), ("reposts", "reposts/"))  # (nome, sufixo da URL do perfil)
 
 SEL_LINK_POST = 'main a[href*="/p/"], main a[href*="/reel/"]'
 RE_CODIGO = re.compile(r"/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)")
@@ -577,7 +577,9 @@ def processar_perfil(conn: sqlite3.Connection, pg: Page, rodada_id: int | None, 
                      perfil: str, resumo: list[LinhaResumo], conta: str | None = None) -> None:
     """Trabalha o perfil-alvo `perfil` com a conta logada `conta` ("@usuario").
 
-    Na ordem: seguir (se ligado), stories (se ligado) e as abas Posts e Reposts.
+    Na ordem: seguir (se ligado), stories (se ligado) e as abas Posts, Reels e
+    Reposts. Um reel que também aparece em Posts é trabalhado uma vez só (o
+    banco pula as ações já feitas naquela publicação).
     """
     if cfg.seguir:
         alvo = Publicacao(REDE, perfil, "perfil", 0, f"@{perfil.lower()}", f"{BASE}/{perfil}/")

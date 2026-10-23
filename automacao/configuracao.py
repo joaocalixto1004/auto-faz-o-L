@@ -22,12 +22,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from automacao import banco, planilhas
+from automacao.redes import protecao
 from automacao.terminal import preparar_console
 
 LIMITES = {"quantidade": (1, 50), "semanas": (1, 52), "limite_diario": (1, 500)}
 MAXIMO_COMENTARIOS = 50
 # Opções que só a interface gráfica edita; a página web as preserva ao salvar.
-CAMPOS_SO_NA_INTERFACE = ("redes", "anti_bloqueio", "seguir", "ver_stories", "repetir",
+CAMPOS_SO_NA_INTERFACE = ("redes", "anti_bloqueio", "boost", "tetos", "seguir", "ver_stories", "repetir",
                           "repetir_minutos", "continuar_sem_login")
 # 50 comentários de 300 caracteres codificados no formulário (acentos viram %XX%XX).
 TAMANHO_MAXIMO_FORMULARIO = 300_000
@@ -69,7 +70,7 @@ def validar(formulario: dict[str, str]) -> tuple[dict[str, str], list[str]]:
         erros.append("Escolha as redes: só Instagram, só TikTok ou as duas.")
     valores["redes"] = redes
     # Modo anti-bloqueio: "sim" ou "nao" (aceita também 1/0, true/false, on/off).
-    for chave, padrao in (("anti_bloqueio", "nao"), ("seguir", "nao"), ("ver_stories", "nao"),
+    for chave, padrao in (("anti_bloqueio", "nao"), ("boost", "nao"), ("seguir", "nao"), ("ver_stories", "nao"),
                           ("repetir", "nao"), ("continuar_sem_login", "sim")):
         valor = formulario.get(chave, padrao).strip().lower()
         valores[chave] = "sim" if valor in ("sim", "s", "1", "true", "on", "yes") else "nao"
@@ -77,6 +78,11 @@ def validar(formulario: dict[str, str]) -> tuple[dict[str, str], list[str]]:
     if not (minutos.isascii() and minutos.isdecimal()) or not 1 <= int(minutos) <= 1440:
         erros.append("O intervalo para recomeçar a lista precisa ser um número de 1 a 1440 minutos.")
     valores["repetir_minutos"] = minutos
+    # Tetos por ação (JSON). Iguais às sugestões, ficam vazios: assim valem as
+    # sugestões de versões futuras.
+    tetos, erros_tetos = protecao.validar_tetos(formulario.get("tetos", ""))
+    erros.extend(erros_tetos)
+    valores["tetos"] = "" if tetos == protecao.tetos_sugeridos() else json.dumps(tetos, ensure_ascii=False)
     # Conta reserva: só é usada quando a planilha não tem ninguém para o Instagram.
     # Vazio vale (sem reserva); preenchido precisa ser um usuário válido.
     conta = formulario.get("compartilhar_com", "").strip().lstrip("@")
@@ -204,6 +210,8 @@ def pagina(valores: dict[str, str], aviso: str = "", erros: list[str] | None = N
 <main>
   <h1>Configuração das interações</h1>
   <p class="sub">Vale para o Instagram e o TikTok, nas próximas execuções da automação.</p>
+  <p class="dica">As redes, a proteção (anti-bloqueio ou boost), os tetos por ação e as ações extras
+    ficam na aba Configurações da janela do programa; esta página não muda essas opções.</p>
   {faixa}
   {resumo_planilhas()}
   <form method="post" action="/">

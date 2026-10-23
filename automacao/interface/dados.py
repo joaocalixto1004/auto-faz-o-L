@@ -24,7 +24,7 @@ from pathlib import Path
 from automacao import banco, caminhos, configuracao, planilhas
 from automacao.abrir_redes import REDES
 from automacao.interagir import interpretar_perfil
-from automacao.redes import comum
+from automacao.redes import comum, protecao
 
 NOMES_REDES = tuple(rede.nome for rede in REDES)
 STATUS_LOGADO = ("ja_logado", "login_detectado")
@@ -394,19 +394,55 @@ def resumo_extras(valores: dict[str, str]) -> str:
             f"Recomeçar: {recomecar} · Conta sem login: {sem_login}")
 
 
+def modo_protecao(valores: dict[str, str]) -> str:
+    """"normal", "anti_bloqueio" ou "boost", como a automação decide (com os dois, vale o anti-bloqueio)."""
+    return protecao.protecao_da_config(valores).nome
+
+
+def texto_protecao(valores: dict[str, str]) -> str:
+    """O modo de proteção para o resumo da aba Início."""
+    modo = modo_protecao(valores)
+    if modo == "anti_bloqueio":
+        texto = "anti-bloqueio (lento e cauteloso)"
+        if valores.get("boost") == "sim":
+            texto += "; o boost marcado fica sem efeito"
+        return texto
+    if modo == "boost":
+        return "boost: sem tetos por hora e por dia nem limite diário ⚠ mais risco de bloqueio"
+    return "normal"
+
+
+def texto_tetos(valores: dict[str, str]) -> str:
+    """Os tetos por ação que valem, para o resumo da aba Início (o total por hora e por dia)."""
+    modo = modo_protecao(valores)
+    if modo == "boost":
+        return "ignorados (boost)"
+    escolhidos = protecao.ler_tetos(valores.get("tetos"))
+    origem = "sugeridos" if escolhidos == protecao.tetos_sugeridos() else "personalizados"
+    if modo == "anti_bloqueio":
+        origem += ", no limite do anti-bloqueio"
+    efetivos = protecao.protecao_da_config(valores)
+    return (f"{origem}: até {efetivos.por_hora['total']} ações/h e {efetivos.por_dia['total']}/dia no total, "
+            "por conta e rede")
+
+
 def resumo_configuracao(valores: dict[str, str]) -> list[tuple[str, str]]:
     """Linhas (rótulo, texto) com a configuração salva."""
     if valores.get("modo") == "tempo":
         publicacoes = f"as das últimas {valores.get('semanas')} semana(s), em cada aba (modo tempo)"
     else:
         publicacoes = f"as {valores.get('quantidade')} primeiras de cada aba (modo quantidade)"
+    limite = f"{valores.get('limite_diario')} publicações por conta, em cada rede"
+    if modo_protecao(valores) == "boost":
+        limite = f"ignorado no modo boost (salvo: {valores.get('limite_diario')} por conta, em cada rede)"
     return [
         ("Redes", texto_redes(valores)),
         ("Publicações", publicacoes),
         ("Comentários", resumo_comentarios(comum.comentarios_da_config(valores), mostrar=2, tamanho=30)),
         ("Ações extras", resumo_extras(valores)),
-        ("Limite diário", f"{valores.get('limite_diario')} publicações por conta, em cada rede"),
-        ("Proteção anti-bloqueio", "ligada" if ligado(valores.get("anti_bloqueio")) else "desligada"),
+        ("Limite diário", limite),
+        ("Tetos", texto_tetos(valores)),
+        ("Proteção", texto_protecao(valores)),
     ]
 
 

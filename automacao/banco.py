@@ -38,6 +38,8 @@ CONFIG_PADRAO = {
     "limite_diario": "40",         # máximo de publicações trabalhadas por conta, por rede, por dia
     "redes": "ambas",              # em quais redes a automação age: "instagram", "tiktok" ou "ambas"
     "anti_bloqueio": "nao",        # "sim" liga o modo anti-bloqueio (bem mais lento e cauteloso)
+    "boost": "nao",                # "sim" ignora os tetos por hora/dia e o limite diário (mais risco)
+    "tetos": "",                   # tetos por ação em JSON (protecao.validar_tetos); vazio: as sugestões
     "seguir": "nao",               # "sim": ao visitar um perfil da lista, segue se ainda não segue
     "ver_stories": "nao",          # "sim": assiste e curte os stories ainda não vistos do perfil
     "repetir": "nao",              # "sim": ao terminar a lista, recomeça sozinho depois de um intervalo

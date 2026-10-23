@@ -14,6 +14,7 @@ from tkinter import messagebox, simpledialog
 import pytest
 
 from automacao import banco, planilhas
+from automacao.interface import aba_configuracoes
 from automacao.interface import janela as interface
 from automacao.redes import comum
 
@@ -69,6 +70,8 @@ class Dialogos:
         for nome in ("askyesno", "askyesnocancel"):
             monkeypatch.setattr(messagebox, nome, self._anotar(nome))
         monkeypatch.setattr(simpledialog, "askstring", self._anotar("askstring"))
+        # A caixa de editar comentário (com a paleta de emojis) responde como o askstring.
+        monkeypatch.setattr(aba_configuracoes, "pedir_comentario", self._anotar("askstring"))
 
     def _anotar(self, nome):
         def funcao(*args, **kwargs):
@@ -134,7 +137,7 @@ def test_resumo_inicial_com_banco_e_planilhas_vazios(janela):
     assert textos["Contas ativas"] == "Principal"
     assert textos["Comentários"] == "1 comentário: “Boa!!!”"
     assert textos["Ações extras"] == "Seguir: não · Stories: não · Recomeçar: não · Conta sem login: pula"
-    assert textos["Proteção anti-bloqueio"] == "desligada"
+    assert textos["Proteção"] == "normal"
     assert "não existe" in textos["Perfis a acessar"]
     assert textos["Compartilhar com"] == "Instagram: ninguém\nTikTok: ninguém"
     assert janela.inicio.combo_conta.get() == "Principal"  # o login vai para a Principal
@@ -593,7 +596,7 @@ def test_configuracoes_redes_extras_e_anti_bloqueio(janela, dialogos):
         "repetir_minutos": "45", "continuar_sem_login": "nao"}
     textos = resumo(janela)
     assert textos["Redes"] == "só TikTok"
-    assert textos["Proteção anti-bloqueio"] == "ligada"
+    assert textos["Proteção"] == "anti-bloqueio (lento e cauteloso)"
     assert textos["Ações extras"] == ("Seguir: sim · Stories: não · Recomeçar: 45 min após terminar · "
                                       "Conta sem login: não inicia")
     assert textos["Compartilhar com"] == "TikTok: ninguém"
