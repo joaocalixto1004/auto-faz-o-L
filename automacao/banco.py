@@ -31,7 +31,8 @@ STATUS_CONCLUIDOS = ("feito", "ja_estava_feito", "nao_confirmado")
 # Valores usados enquanto a página de configuração não tiver salvo nada.
 CONFIG_PADRAO = {
     "modo": "quantidade",          # "quantidade" (N primeiras) ou "tempo" (últimas X semanas)
-    "quantidade": "3",             # publicações por aba no modo quantidade
+    "quantidade": "3",             # publicações por aba no modo quantidade (o máximo, com faixa)
+    "quantidade_min": "",          # mínimo da faixa: cada conta sorteia de quantidade_min a quantidade; vazio = fixo
     "semanas": "2",                # janela de tempo no modo tempo
     "comentario": "Boa!!!",
     "compartilhar_com": "",        # Instagram, reserva para quando a planilha não tiver ninguém (vazio: sem reserva)

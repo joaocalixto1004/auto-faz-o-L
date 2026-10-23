@@ -6,6 +6,7 @@ reabertura de uma janela fechada e o Parar.
 """
 
 import argparse
+from types import SimpleNamespace
 import io
 import os
 import sys
@@ -51,6 +52,9 @@ class PaginaFalsa:
 
     def close(self):
         self.fechada = True
+
+    def bring_to_front(self):
+        pass
 
 
 class ContextoFalso:
@@ -485,3 +489,229 @@ def test_zerar_contagem_libera_os_tetos_sem_esquecer_o_que_foi_feito(conn):
     assert banco.publicacoes_trabalhadas_hoje(conn, "Instagram", "@ana") == 0
     assert banco.publicacoes_do_alvo_hoje(conn, "Instagram", "alvo", "@ana") == 0
     assert banco.acoes_concluidas(conn, "Instagram", "R0", "@ana") == {"repostar"}   # nunca repete
+
+
+# ------------------------------------------------------- aviso de bloqueio para tudo
+
+class ContextoLogado(ContextoFalso):
+    def cookies(self):
+        return [{"name": "sessionid", "domain": ".instagram.com", "value": "x"},
+                {"name": "sessionid", "domain": ".tiktok.com", "value": "x"}]
+
+
+class RedeFalsa:
+    """No lugar de instagram/tiktok: anota os perfis e levanta um aviso no perfil pedido."""
+
+    def __init__(self, avisar_em=None, erro=None):
+        self.visitados = []
+        self.avisar_em = avisar_em
+        self.erro = erro
+
+    def processar_perfil(self, conn, pagina, rodada_id, cfg, perfil, resumo, conta=None):
+        self.visitados.append(perfil)
+        if perfil == self.avisar_em:
+            raise self.erro
+
+
+def test_aviso_de_bloqueio_para_a_lista_inteira_e_poe_a_conta_em_pausa(conn, monkeypatch):
+    from automacao import banco
+    from automacao.redes.protecao import Bloqueio
+    instagram_falso = RedeFalsa(avisar_em="b", erro=Bloqueio("Tente novamente mais tarde"))
+    tiktok_falso = RedeFalsa()
+    monkeypatch.setattr(interagir, "MODULOS", {"Instagram": instagram_falso, "TikTok": tiktok_falso})
+    monkeypatch.setattr(interagir, "pausa", lambda intervalo=None: None)
+    with pytest.raises(interagir.ParadaPorAviso, match="Tente novamente mais tarde"):
+        interagir.processar_perfis(conn, ContextoLogado(), None, config(), ALVOS, 0, set(), [], CONTAS)
+    assert instagram_falso.visitados == ["a", "b"]     # parou no aviso...
+    assert tiktok_falso.visitados == []                # ...e nada depois dele, nem o TikTok "c"
+    assert banco.pausa_ativa(conn, "Instagram", "@ig") is not None
+
+
+def test_teto_do_dia_da_conta_nao_para_as_outras_redes(conn, monkeypatch):
+    from automacao.redes.protecao import LimiteDiario
+    instagram_falso = RedeFalsa(avisar_em="a", erro=LimiteDiario("teto do dia"))
+    tiktok_falso = RedeFalsa()
+    monkeypatch.setattr(interagir, "MODULOS", {"Instagram": instagram_falso, "TikTok": tiktok_falso})
+    monkeypatch.setattr(interagir, "pausa", lambda intervalo=None: None)
+    assert interagir.processar_perfis(conn, ContextoLogado(), None, config(), ALVOS, 0, set(), [], CONTAS) == 5
+    assert instagram_falso.visitados == ["a"] and tiktok_falso.visitados == ["c", "e"]
+
+
+def test_aviso_na_segunda_rede_para_a_primeira_tambem(conn, chrome, monkeypatch):
+    instagram_parou = threading.Event()
+
+    def instagram_trabalhando():
+        try:
+            for _ in range(200):
+                terminal.dormir(0.05)
+        except KeyboardInterrupt:
+            instagram_parou.set()
+            raise
+        return 3
+
+    def tiktok_avisou():
+        time.sleep(0.2)
+        raise interagir.ParadaPorAviso("TikTok (@tt): Você está indo rápido demais")
+
+    processar = ProcessarFalso({("Instagram", 1): instagram_trabalhando, ("TikTok", 1): tiktok_avisou})
+    with pytest.raises(interagir.ParadaPorAviso, match="rápido demais"):
+        rodar_em_paralelo(conn, chrome, processar, monkeypatch)
+    assert instagram_parou.is_set()
+
+
+def test_aviso_na_primeira_rede_para_a_segunda_tambem(conn, chrome, monkeypatch):
+    tiktok_parou = threading.Event()
+
+    def tiktok_trabalhando():
+        try:
+            for _ in range(200):
+                terminal.dormir(0.05)
+        except KeyboardInterrupt:
+            tiktok_parou.set()
+            raise
+        return 2
+
+    def instagram_avisou():
+        time.sleep(0.2)
+        raise interagir.ParadaPorAviso("Instagram (@ig): Ação bloqueada")
+
+    processar = ProcessarFalso({("TikTok", 1): tiktok_trabalhando, ("Instagram", 1): instagram_avisou})
+    with pytest.raises(interagir.ParadaPorAviso, match="Ação bloqueada"):
+        rodar_em_paralelo(conn, chrome, processar, monkeypatch)
+    assert tiktok_parou.wait(2)
+
+
+def test_aviso_encerra_todas_as_contas_e_nao_recomeca(conn, monkeypatch, capsys):
+    from automacao import banco
+    contas_rodadas = []
+
+    def rodar(p, conn_, rodada_id, cfg, perfil_nav, alvos, resumo, args):
+        contas_rodadas.append(perfil_nav["nome"])
+        raise interagir.ParadaPorAviso("Instagram (@ig): Ação bloqueada")
+
+    monkeypatch.setattr(interagir, "rodar_perfil_navegador", rodar)
+    banco.criar_perfil(conn, "Loja")
+    perfis_nav = banco.listar_perfis(conn, somente_ativos=True)
+    args = argparse.Namespace(perfis_navegador=None, simular=False, continuar_sem_login=True, trace=False)
+    status = interagir.executar_volta(None, conn, config(), ALVOS, perfis_nav, args, 1, 20)
+    assert status == "aviso"
+    assert contas_rodadas == [perfis_nav[0]["nome"]]          # a segunda conta nem começa
+    assert "A automação parou inteira" in capsys.readouterr().out
+    assert conn.execute("SELECT status FROM rodadas ORDER BY id DESC").fetchone()[0] == "interrompida"
+
+
+def test_captcha_do_tiktok_conta_como_aviso_e_nao_espera(monkeypatch):
+    from automacao.redes import tiktok
+    from automacao.redes.protecao import Bloqueio
+    visivel = SimpleNamespace(first=SimpleNamespace(is_visible=lambda: True))
+    pagina = SimpleNamespace(locator=lambda seletor: visivel)
+    inicio = time.monotonic()
+    with pytest.raises(Bloqueio, match="captcha"):
+        tiktok.esperar_captcha(pagina)
+    assert time.monotonic() - inicio < 1
+    escondido = SimpleNamespace(first=SimpleNamespace(is_visible=lambda: False))
+    tiktok.esperar_captcha(SimpleNamespace(locator=lambda seletor: escondido))   # sem captcha: segue
+
+
+# ------------------------------------------------------- faixa de publicações por aba
+
+def test_sem_faixa_todas_as_contas_usam_o_maximo():
+    cfg = config(quantidade=5)
+    assert comum.sortear_quantidades(cfg, CONTAS) is cfg
+    assert cfg.quantidade_de("Instagram") == 5
+
+
+def test_faixa_sorteia_um_numero_por_conta_e_varia(capsys):
+    cfg = config(quantidade=8, quantidade_min=2)
+    assert cfg.tem_faixa and "de 2 a 8" in cfg.descricao()
+    vistos = {rede: set() for rede in CONTAS}
+    for _ in range(300):
+        sorteada = comum.sortear_quantidades(cfg, CONTAS)
+        for rede in CONTAS:
+            n = sorteada.quantidade_de(rede)
+            assert 2 <= n <= 8
+            vistos[rede].add(n)
+    assert all(len(numeros) >= 6 for numeros in vistos.values())   # usa a faixa toda, sem padrão fixo
+    assert "publicações por aba nesta volta (sorteio de 2 a 8)" in capsys.readouterr().out
+
+
+def test_coletar_da_grade_usa_a_quantidade_da_conta():
+    cfg = comum.sortear_quantidades(config(quantidade=6, quantidade_min=6), CONTAS)   # faixa 6-6: fixo
+    assert cfg.quantidade_de("TikTok") == 6
+    cfg = config(quantidade=10, quantidade_min=1, quantidades={"Instagram": 2, "TikTok": 7})
+    hrefs = [f"/p/C{i}/" for i in range(20)]
+    lidos = comum.coletar_da_grade(SimpleNamespace(), lambda: hrefs,
+                                   lambda h: (h.split("/")[2], "https://x" + h), lambda codigo: None,
+                                   cfg, "Instagram", "fulano", "posts")
+    assert len(lidos) == 2
+
+
+@pytest.mark.parametrize(("salvas", "esperado"), [
+    ({"quantidade": "6", "quantidade_min": "2"}, 2),
+    ({"quantidade": "6", "quantidade_min": ""}, None),
+    ({"quantidade": "6", "quantidade_min": "9"}, None),      # maior que o máximo: sem faixa
+    ({"quantidade": "6", "quantidade_min": "x"}, None),
+    ({"quantidade": "6"}, None),
+])
+def test_quantidade_minima_salva(salvas, esperado):
+    assert interagir.quantidade_minima(salvas) == esperado
+
+
+def test_validar_faixa_de_quantidade():
+    from automacao import configuracao
+    base = {"modo": "quantidade", "quantidade": "6", "semanas": "2", "comentario": "Boa!", "limite_diario": "40"}
+    valores, erros = configuracao.validar(dict(base, quantidade_min="2"))
+    assert erros == [] and valores["quantidade_min"] == "2"
+    _, erros = configuracao.validar(dict(base, quantidade_min="7"))
+    assert erros and "não pode ser maior que o máximo" in erros[0]
+    _, erros = configuracao.validar(dict(base, quantidade_min="0"))
+    assert erros and "de 1 a 50" in erros[0]
+    valores, erros = configuracao.validar(dict(base, quantidade_min=""))
+    assert erros == [] and valores["quantidade_min"] == ""
+    valores, erros = configuracao.validar(dict(base, modo="tempo", quantidade_min="99"))
+    assert erros == [] and "quantidade_min" not in valores        # fora de uso: não cobra, não grava
+
+
+
+# ------------------------------------------------------- Instagram: limite da API na janela de compartilhar
+
+class PaginaComRespostas:
+    def __init__(self):
+        self.ouvintes = []
+
+    def on(self, evento, funcao):
+        assert evento == "response"
+        self.ouvintes.append(funcao)
+
+    def remove_listener(self, evento, funcao):
+        self.ouvintes.remove(funcao)
+
+    def responder(self, url, corpo):
+        for funcao in list(self.ouvintes):
+            funcao(SimpleNamespace(url=url, text=lambda: corpo))
+
+
+LIMITE = '{"errors":[{"message":"Rate limit exceeded","severity":"CRITICAL","code":1675004}]}'
+
+
+def test_vigiar_limite_da_api_reconhece_o_rate_limit_e_para_de_ouvir():
+    pg = PaginaComRespostas()
+    estado, parar = instagram.vigiar_limite_da_api(pg)
+    pg.responder("https://www.instagram.com/api/graphql", '{"data":{"results":[]}}')
+    assert estado["limitada"] is False
+    pg.responder("https://static.cdninstagram.com/x.js", LIMITE)      # fora da API: não conta
+    assert estado["limitada"] is False
+    pg.responder("https://www.instagram.com/api/graphql", LIMITE)
+    assert estado["limitada"] is True
+    parar()
+    assert pg.ouvintes == []
+
+
+@pytest.mark.parametrize(("corpo", "limitada"), [
+    (LIMITE, True),
+    ('{"errors":[{"code": 1675004}]}', True),
+    ('{"message":"rate limit exceeded"}', True),
+    ('{"data":{"user":"ok"}}', False),
+])
+def test_resposta_de_limite(corpo, limitada):
+    assert bool(instagram.RE_LIMITE_API.search(corpo)) is limitada

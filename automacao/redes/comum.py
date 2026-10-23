@@ -14,7 +14,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,6 +64,10 @@ class Config:
     # Ações extras no perfil-alvo (configurações "seguir" e "ver_stories").
     seguir: bool = False
     ver_stories: bool = False
+    # Modo quantidade com faixa: de `quantidade_min` a `quantidade` publicações por aba,
+    # sorteado para cada conta (sortear_quantidades); `quantidades` guarda o sorteio por rede.
+    quantidade_min: int | None = None
+    quantidades: dict[str, int] = field(default_factory=dict)
 
     @property
     def corte(self) -> datetime | None:
@@ -72,10 +76,35 @@ class Config:
             return None
         return datetime.now(timezone.utc) - timedelta(weeks=self.semanas)
 
+    @property
+    def tem_faixa(self) -> bool:
+        return self.modo == "quantidade" and bool(self.quantidade_min) and self.quantidade_min < self.quantidade
+
+    def quantidade_de(self, rede: str) -> int:
+        """Publicações por aba que a conta desta rede trabalha (a sorteada, se houver faixa)."""
+        return self.quantidades.get(rede, self.quantidade)
+
     def descricao(self) -> str:
         if self.modo == "tempo":
             return f"publicações das últimas {self.semanas} semana(s)"
+        if self.tem_faixa:
+            return f"de {self.quantidade_min} a {self.quantidade} publicações de cada aba (sorteado para cada conta)"
         return f"as {self.quantidade} primeiras publicações de cada aba"
+
+
+def sortear_quantidades(cfg: Config, contas: dict[str, str]) -> Config:
+    """Sorteia, para cada conta logada (uma por rede), quantas publicações por aba ela trabalha.
+
+    Usa a aleatoriedade do sistema (não determinística). Sem faixa (mínimo
+    vazio ou igual ao máximo), devolve a configuração como está.
+    """
+    if not cfg.tem_faixa:
+        return cfg
+    sorteadas = {rede: _acaso.randint(cfg.quantidade_min, cfg.quantidade) for rede in contas}
+    for rede, quantidade in sorteadas.items():
+        print(f"[{rede}] {contas[rede]}: {quantidade} publicações por aba nesta volta "
+              f"(sorteio de {cfg.quantidade_min} a {cfg.quantidade}).", flush=True)
+    return replace(cfg, quantidades=sorteadas)
 
 
 @dataclass(frozen=True)
@@ -481,7 +510,7 @@ def coletar_da_grade(pg: Page, ler_hrefs: Callable[[], list[str]],
             achado = extrair(href)
             if achado and achado[0] not in ordem:
                 ordem[achado[0]] = achado[1]
-        if cfg.modo == "quantidade" and len(ordem) >= cfg.quantidade:
+        if cfg.modo == "quantidade" and len(ordem) >= cfg.quantidade_de(rede):
             break
         if cfg.modo == "tempo" and len(ordem) >= MAXIMO_NA_GRADE:
             break
@@ -510,7 +539,7 @@ def coletar_da_grade(pg: Page, ler_hrefs: Callable[[], list[str]],
         if corte is not None and data is not None and data < corte:
             continue
         publicacoes.append(Publicacao(rede, perfil, aba, posicao, codigo, url, data))
-        if cfg.modo == "quantidade" and len(publicacoes) == cfg.quantidade:
+        if cfg.modo == "quantidade" and len(publicacoes) == cfg.quantidade_de(rede):
             break
     return publicacoes
 

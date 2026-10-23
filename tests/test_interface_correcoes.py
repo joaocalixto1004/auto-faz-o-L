@@ -553,3 +553,30 @@ def test_todo_emoji_da_paleta_tem_imagem():
         assert (componentes.PASTA_EMOJIS / componentes.arquivo_do_emoji(emoji)).is_file(), emoji
     assert componentes.arquivo_do_emoji("🇧🇷") == "1f1e7-1f1f7.png"
     assert componentes.arquivo_do_emoji("❤️") == "2764-fe0f.png"
+
+
+# ------------------------------------------------------------ faixa de publicações por aba
+
+def test_faixa_de_quantidade_na_aba_configuracoes(janela, dialogos):
+    aba = janela.configuracoes
+    assert aba.vars["quantidade_min"].get() == aba.vars["quantidade"].get()   # sem faixa: mínimo = máximo
+    assert not aba.tem_alteracoes()
+    aba.vars["modo"].set("quantidade")
+    aba.vars["quantidade_min"].set("2")
+    aba.vars["quantidade"].set("6")
+    assert aba.salvar()
+    with closing(banco.conectar()) as conn:
+        salvas = banco.ler_configuracoes(conn)
+    assert (salvas["quantidade_min"], salvas["quantidade"]) == ("2", "6")
+    assert "de 2 a 6 de cada aba, sorteado para cada conta" in resumo(janela)["Publicações"]
+    aba.carregar()
+    assert aba.vars["quantidade_min"].get() == "2" and not aba.tem_alteracoes()
+
+    aba.vars["quantidade_min"].set("9")                          # mínimo maior que o máximo
+    assert not aba.salvar()
+    assert "não pode ser maior que o máximo" in dialogos.chamadas[-1][1][1]
+
+    aba.vars["modo"].set("tempo")
+    aba._atualizar_modo()
+    assert str(aba.spin_quantidade_min.cget("state")) == "disabled"
+    assert str(aba.spin_quantidade.cget("state")) == "disabled"

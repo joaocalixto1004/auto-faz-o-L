@@ -14,7 +14,7 @@ import pytest
 from automacao import banco, configuracao
 
 NOVAS_OPCOES = {"seguir": "nao", "ver_stories": "nao", "repetir": "nao", "repetir_minutos": "20",
-                "continuar_sem_login": "sim", "boost": "nao", "tetos": ""}
+                "continuar_sem_login": "sim", "boost": "nao", "tetos": "", "quantidade_min": ""}
 
 VALIDO = {
     "modo": "quantidade",

@@ -115,8 +115,10 @@ O QUE ELE NUNCA FAZ
 - Nunca tira uma curtida, um repost, um favorito ou um "seguir" que já
   estavam feitos (nem os que você fez com a mão).
 - Nunca faz a mesma coisa duas vezes na mesma publicação.
-- Se o Instagram ou o TikTok mostrar um aviso de bloqueio, ele PARA naquela
-  rede e espera 24 horas antes de tentar de novo.
+- Se o Instagram ou o TikTok mostrar QUALQUER aviso de bloqueio (ou pedir o
+  teste de "não sou robô"), ele PARA TUDO na hora: as duas redes e todas as
+  contas. A conta que levou o aviso só volta a agir naquela rede depois de 24
+  horas.
 
 
 CUIDADOS
@@ -141,8 +143,9 @@ DEU PROBLEMA?
 - Aparece "A janela da automação já está aberta": o programa já está aberto.
   Procure a janela dele na barra de tarefas.
 - Não salva a planilha: feche a planilha no Excel e tente de novo.
-- Apareceu um captcha (aquele teste de "não sou robô") no TikTok: resolva com
-  a mão na janela do Chrome. O programa espera até 5 minutos.
+- O programa parou sozinho com "Aviso de bloqueio": a rede desconfiou. Abra o
+  Instagram ou o TikTok no celular, resolva o que ela pedir e espere pelo menos
+  um dia antes de usar o programa de novo nessa conta.
 - A tela "Início" diz que a conta está "em pausa": a rede deu um aviso. Espere
   o horário que aparece ali.
 - Os emojis aparecem como quadradinhos na janela do programa: é só a tela do

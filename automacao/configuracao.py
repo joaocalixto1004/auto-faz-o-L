@@ -28,7 +28,7 @@ from automacao.terminal import preparar_console
 LIMITES = {"quantidade": (1, 50), "semanas": (1, 52), "limite_diario": (1, 500)}
 MAXIMO_COMENTARIOS = 50
 # Opções que só a interface gráfica edita; a página web as preserva ao salvar.
-CAMPOS_SO_NA_INTERFACE = ("redes", "anti_bloqueio", "boost", "tetos", "seguir", "ver_stories", "repetir",
+CAMPOS_SO_NA_INTERFACE = ("redes", "anti_bloqueio", "boost", "tetos", "quantidade_min", "seguir", "ver_stories", "repetir",
                           "repetir_minutos", "continuar_sem_login")
 # 50 comentários de 300 caracteres codificados no formulário (acentos viram %XX%XX).
 TAMANHO_MAXIMO_FORMULARIO = 300_000
@@ -52,6 +52,22 @@ def validar(formulario: dict[str, str]) -> tuple[dict[str, str], list[str]]:
                 valores[campo] = texto
             continue
         valores[campo] = texto
+    # Mínimo da faixa do modo quantidade (cada conta sorteia de mínimo a máximo). Vazio:
+    # sem faixa (sempre o máximo). Só é cobrado no modo quantidade.
+    minimo = formulario.get("quantidade_min", "").strip()
+    if minimo:
+        maximo = valores.get("quantidade", "")
+        certo = minimo.isascii() and minimo.isdecimal() and 1 <= int(minimo) <= LIMITES["quantidade"][1]
+        if certo and maximo.isascii() and maximo.isdecimal() and int(minimo) > int(maximo):
+            certo = False
+            if modo != "tempo":
+                erros.append(f"O mínimo de publicações por aba ({minimo}) não pode ser maior que o máximo ({maximo}).")
+        elif not certo and modo != "tempo":
+            erros.append(f"O mínimo de publicações por aba precisa ser um número de 1 a {LIMITES['quantidade'][1]}.")
+        if certo:
+            valores["quantidade_min"] = minimo
+    else:
+        valores["quantidade_min"] = ""
     # Lista de comentários, um por linha (o campo antigo "comentario" ainda vale).
     texto = formulario.get("comentarios", formulario.get("comentario", ""))
     comentarios = [linha.strip() for linha in texto.splitlines() if linha.strip()]

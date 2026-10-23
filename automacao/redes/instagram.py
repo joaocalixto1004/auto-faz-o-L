@@ -11,6 +11,7 @@ o equivalente em inglês como reserva.
 import random
 import re
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from playwright.sync_api import Error as PlaywrightError
@@ -351,15 +352,45 @@ def comentar(pg: Page, cfg: Config, pub: Publicacao) -> Resultado:
     return Resultado("feito", f"{texto}{extra}")
 
 
+# Resposta da API do Instagram quando ele limita uma operação (ex.: a busca de contas
+# da janela de compartilhar): a tela não mostra aviso, só some com a busca.
+RE_LIMITE_API = re.compile(r"Rate limit exceeded|\"code\"\s*:\s*1675004", re.I)
+
+
+def vigiar_limite_da_api(pg: Page) -> tuple[dict[str, bool], Callable]:
+    """Começa a olhar as respostas da API; devolve ({"limitada": bool}, função para parar)."""
+    estado = {"limitada": False}
+
+    def ver(resposta) -> None:
+        if "/graphql" not in resposta.url and "/api/" not in resposta.url:
+            return
+        try:
+            corpo = resposta.text()
+        except PlaywrightError:
+            return
+        if RE_LIMITE_API.search(corpo or ""):
+            estado["limitada"] = True
+
+    pg.on("response", ver)
+    return estado, lambda: pg.remove_listener("response", ver)
+
+
 def compartilhar(pg: Page, cfg: Config, pub: Publicacao, destino: str) -> Resultado:
     clicar(pg, barra_acoes(pg).locator(SVG_COMPARTILHAR).first)
     dialogo = pg.locator('[role="dialog"]').filter(has=pg.locator(CAMPO_PESQUISA)).last
     dialogo.wait_for(state="visible", timeout=10_000)
+    limite, parar_de_vigiar = vigiar_limite_da_api(pg)
     try:
         clicar(pg, dialogo.locator(CAMPO_PESQUISA).first)
-        digitar(pg, destino)
+        # O usuário entra inteiro de uma vez (como colado): letra a letra, cada letra
+        # dispara uma busca nova, o que gasta o limite de buscas do Instagram e faz a
+        # janela se refazer no meio da digitação.
+        pg.keyboard.insert_text(destino)
         conta = dialogo.get_by_text(destino, exact=True).first
-        conta.wait_for(state="visible", timeout=15_000)
+        if not esperar_ate(lambda: limite["limitada"] or conta.is_visible(), 15):
+            raise PlaywrightTimeout(f"a conta {destino} não apareceu na busca da janela de compartilhar")
+        if limite["limitada"] and not conta.is_visible():
+            raise Bloqueio("o Instagram limitou a busca de contas para compartilhar (\"Rate limit exceeded\")")
         if cfg.simular:
             return Resultado("simulado", f"conta {destino} encontrada")
         clicar(pg, conta)
@@ -373,6 +404,7 @@ def compartilhar(pg: Page, cfg: Config, pub: Publicacao, destino: str) -> Result
             raise NaoConfirmado("a janela de compartilhar não fechou depois de enviar")
         return Resultado("feito", f"enviado para {destino}")
     finally:
+        parar_de_vigiar()
         fechar_janelas(pg)
 
 

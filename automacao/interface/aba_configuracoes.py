@@ -28,7 +28,7 @@ from automacao.redes import comum, protecao
 
 # Opções sim/não, guardadas como "sim" ou "nao" (como o configuracao.validar devolve).
 OPCOES_SIM_NAO = ("anti_bloqueio", "boost", "seguir", "ver_stories", "repetir", "continuar_sem_login")
-CAMPOS = ("modo", "quantidade", "semanas", "compartilhar_com", "limite_diario", "redes",
+CAMPOS = ("modo", "quantidade_min", "quantidade", "semanas", "compartilhar_com", "limite_diario", "redes",
           "repetir_minutos", *OPCOES_SIM_NAO)
 ESCOLHAS_REDES = (("instagram", "Só Instagram"), ("tiktok", "Só TikTok"), ("ambas", "As duas"))
 MINUTOS_REPETIR = (1, 1440)
@@ -160,10 +160,17 @@ class AbaConfiguracoes(ttk.Frame):
         modo.columnconfigure(3, weight=1)
         ttk.Radiobutton(modo, text="Por número de publicações", value="quantidade",
                         variable=self.vars["modo"], command=self._atualizar_modo).grid(row=0, column=0, sticky="w")
-        ttk.Label(modo, text="Publicações por aba (1 a 50):").grid(row=0, column=1, sticky="e", padx=(24, 6))
-        self.spin_quantidade = ttk.Spinbox(modo, from_=1, to=50, width=6, textvariable=self.vars["quantidade"],
+        ttk.Label(modo, text="Publicações por aba, de:").grid(row=0, column=1, sticky="e", padx=(24, 6))
+        faixa = ttk.Frame(modo)
+        faixa.grid(row=0, column=2, sticky="w")
+        self.spin_quantidade_min = ttk.Spinbox(faixa, from_=1, to=50, width=6, textvariable=self.vars["quantidade_min"],
+                                               validate="key", validatecommand=self._apenas_digitos)
+        self.spin_quantidade_min.pack(side="left")
+        ttk.Label(faixa, text="a").pack(side="left", padx=6)
+        self.spin_quantidade = ttk.Spinbox(faixa, from_=1, to=50, width=6, textvariable=self.vars["quantidade"],
                                            validate="key", validatecommand=self._apenas_digitos)
-        self.spin_quantidade.grid(row=0, column=2, sticky="w")
+        self.spin_quantidade.pack(side="left")
+        ttk.Label(faixa, text="(1 a 50)", style="Suave.TLabel").pack(side="left", padx=(6, 0))
         ttk.Radiobutton(modo, text="Por tempo", value="tempo",
                         variable=self.vars["modo"], command=self._atualizar_modo).grid(
             row=1, column=0, sticky="w", pady=(6, 0))
@@ -171,8 +178,10 @@ class AbaConfiguracoes(ttk.Frame):
         self.spin_semanas = ttk.Spinbox(modo, from_=1, to=52, width=6, textvariable=self.vars["semanas"],
                                         validate="key", validatecommand=self._apenas_digitos)
         self.spin_semanas.grid(row=1, column=2, sticky="w", pady=(6, 0))
-        self._dica(modo, "No modo por tempo, conta a data em que a publicação foi postada. "
-                         "Posts fixados antigos ficam de fora.").grid(
+        self._dica(modo, "Por número: com mínimo e máximo diferentes, cada conta sorteia, a cada volta, quantas "
+                         "publicações trabalha em cada aba (ex.: de 2 a 6); para um número fixo, use o mesmo nos "
+                         "dois. Por tempo: conta a data em que a publicação foi postada; posts fixados antigos "
+                         "ficam de fora.").grid(
             row=2, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         return modo
 
@@ -354,6 +363,8 @@ class AbaConfiguracoes(ttk.Frame):
                     valor = "sim" if dados.ligado(valor) else "nao"
                 elif campo == "redes" and valor not in banco.REDES_ESCOLHA:
                     valor = "ambas"  # o que a automação faz com um valor desconhecido
+                elif campo == "quantidade_min" and not valor.strip():
+                    valor = str(valores.get("quantidade", ""))  # sem faixa salva: mínimo = máximo (fixo)
                 var.set(valor)
             self._definir_comentarios(comum.comentarios_da_config(valores))
             self._preencher_tetos(protecao.ler_tetos(valores.get("tetos")))  # vazio: as sugestões
@@ -488,6 +499,7 @@ class AbaConfiguracoes(ttk.Frame):
     def _atualizar_modo(self) -> None:
         por_tempo = self.vars["modo"].get() == "tempo"
         self.spin_quantidade.configure(state="disabled" if por_tempo else "normal")
+        self.spin_quantidade_min.configure(state="disabled" if por_tempo else "normal")
         self.spin_semanas.configure(state="normal" if por_tempo else "disabled")
 
     def _atualizar_repetir(self) -> None:

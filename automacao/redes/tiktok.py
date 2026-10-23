@@ -30,7 +30,6 @@ ABAS = (("videos", "videos-tab", "user-post-item"),
 RE_CODIGO = re.compile(r"/(?:video|photo)/(\d+)")
 SEL_CAPTCHA = ("#captcha-verify-container-main-page, .captcha-verify-container, "
                "#tiktok-verify-ele, [id^='captcha_container']")
-TIMEOUT_CAPTCHA_S = 300
 
 BOTAO_CURTIR = 'button:has([data-e2e="browse-like-icon"])'
 TRACOS_FAVORITO = '[data-e2e="browse-favorite-icon"] svg path'
@@ -67,14 +66,12 @@ def meu_usuario(pg: Page) -> str | None:
 
 
 def esperar_captcha(pg: Page) -> None:
-    """Se aparecer um captcha, espera a pessoa resolver na janela."""
-    if not pg.locator(SEL_CAPTCHA).first.is_visible():
-        return
-    print(f"[{REDE}] Apareceu um captcha. Resolva na janela do navegador "
-          f"(espero até {TIMEOUT_CAPTCHA_S // 60} min)...")
-    if not esperar_ate(lambda: not pg.locator(SEL_CAPTCHA).first.is_visible(), TIMEOUT_CAPTCHA_S, 1):
-        raise Bloqueio("o captcha do TikTok não foi resolvido")
-    print(f"[{REDE}] Captcha resolvido, continuando.")
+    """Um captcha é o TikTok desconfiando: conta como aviso de bloqueio e para tudo.
+
+    (O nome ficou da versão antiga, que esperava a pessoa resolver.)
+    """
+    if pg.locator(SEL_CAPTCHA).first.is_visible():
+        raise Bloqueio("o TikTok pediu uma verificação (captcha)")
 
 
 # ---------------------------------------------------------------- navegação

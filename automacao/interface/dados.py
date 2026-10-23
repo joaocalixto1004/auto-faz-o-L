@@ -431,7 +431,11 @@ def resumo_configuracao(valores: dict[str, str]) -> list[tuple[str, str]]:
     if valores.get("modo") == "tempo":
         publicacoes = f"as das últimas {valores.get('semanas')} semana(s), em cada aba (modo tempo)"
     else:
-        publicacoes = f"as {valores.get('quantidade')} primeiras de cada aba (modo quantidade)"
+        minimo, maximo = str(valores.get("quantidade_min") or "").strip(), str(valores.get("quantidade", ""))
+        if minimo.isdecimal() and maximo.isdecimal() and int(minimo) < int(maximo):
+            publicacoes = f"de {minimo} a {maximo} de cada aba, sorteado para cada conta (modo quantidade)"
+        else:
+            publicacoes = f"as {maximo} primeiras de cada aba (modo quantidade)"
     limite = f"{valores.get('limite_diario')} publicações por conta, em cada rede"
     if modo_protecao(valores) == "boost":
         limite = f"ignorado no modo boost (salvo: {valores.get('limite_diario')} por conta, em cada rede)"

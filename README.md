@@ -119,9 +119,11 @@ programa com algo rodando pede confirmação e também para tudo.
 
 - **Em quais redes agir**: só Instagram, só TikTok ou as duas (ao mesmo tempo, cada uma na sua
   janela). Os logins continuam guardados; os perfis da planilha das outras redes são pulados.
-- **Quais publicações**: as N primeiras de cada aba do perfil (1 a 50) ou as das últimas X
-  semanas (1 a 52; posts fixados antigos ficam de fora). Só o número do modo escolhido precisa
-  estar preenchido.
+- **Quais publicações**: as primeiras de cada aba do perfil, **de um mínimo a um máximo** (1 a
+  50), ou as das últimas X semanas (1 a 52; posts fixados antigos ficam de fora). Com mínimo e
+  máximo diferentes, cada conta sorteia (sem padrão, pela aleatoriedade do sistema) quantas
+  publicações trabalha a cada volta, e o log mostra o número; para um número fixo, use o mesmo
+  nos dois. Só os números do modo escolhido precisam estar preenchidos.
 - **Comentários**: uma lista (até 50, de até 300 letras), com emojis se quiser (há uma paleta ao
   lado do campo). A cada publicação o programa sorteia um, sem repetir o da publicação anterior.
   O emoji é digitado inteiro, de uma vez, como pelo seletor do celular.
@@ -181,16 +183,21 @@ Regras de segurança:
 - **Curtir, repostar, favoritar e seguir só são clicados quando a página mostra que ainda não
   foram feitos.** Esses botões ligam e desligam; clicar num que já está ligado desfaria a ação
   (inclusive uma que você fez à mão). Se o programa não tiver certeza do estado, ele não clica.
+- **No compartilhar, o destinatário entra inteiro de uma vez** (como colado): digitado letra a
+  letra, cada letra dispara uma busca no Instagram e o limite de buscas acaba rápido.
 - **Compartilhar e comentar de novo é aceitável.** Se você já compartilhou ou comentou uma
   publicação por conta própria, o programa pode fazer isso mais uma vez.
 - **O programa nunca repete o que ele mesmo fez.** Cada ação vai para o banco (`automacao.db`),
   separada por conta, antes do clique; se ele não conseguir confirmar o resultado na tela, grava
   "não confirmado" e segue em frente, sem tentar de novo. Só uma ação que nem chegou a acontecer
   é tentada de novo numa próxima vez.
-- **Aviso, bloqueio ou captcha**: se a rede mostrar um aviso ("tente mais tarde", ação
-  bloqueada), aquela conta para de agir naquela rede e fica **em pausa por 24 horas** (48 horas
-  com a proteção anti-bloqueio), mesmo que você inicie a automação de novo. No TikTok, se
-  aparecer um captcha, ele espera até 5 minutos você resolver na janela.
+- **Aviso, bloqueio ou captcha: para tudo.** Se qualquer rede mostrar um aviso ("tente mais
+  tarde", ação bloqueada) ou pedir verificação (captcha), a automação **inteira para na hora**:
+  as duas redes, todas as contas, em qualquer modo (inclusive o boost), e não recomeça sozinha.
+  A conta que levou o aviso fica **em pausa naquela rede por 24 horas** (48 horas com a proteção
+  anti-bloqueio), mesmo que você inicie de novo. Confira a conta no app antes de voltar. Conta
+  como aviso também o limite que o Instagram aplica sem mostrar nada na tela: na janela de
+  compartilhar, a busca de contas responde "Rate limit exceeded" e a lista de contatos some.
 - **Ritmo de pessoa**: o mouse anda até cada botão e hesita um instante antes de clicar, o texto
   é digitado letra a letra (com paradas de vez em quando entre as palavras) e as pausas oscilam
   sem padrão: o sorteio usa a aleatoriedade do sistema (não dá para prever nem repetir), a

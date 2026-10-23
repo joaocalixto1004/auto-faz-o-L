@@ -52,7 +52,7 @@ from automacao.caminhos import PASTA_TRACES, TRAVA_AUTOMACAO
 from automacao.redes import instagram, tiktok
 from automacao.redes.protecao import LimiteDiario, protecao_da_config, registrar_aviso
 from automacao.redes.comum import (Bloqueio, Config, LinhaResumo,
-                                   comentarios_da_config, pausa)
+                                   comentarios_da_config, pausa, sortear_quantidades)
 from automacao.terminal import (PARADA, SaidaComRotulos, definir_rotulo, dormir, obter_trava, preparar_console,
                                 vigiar_pedido_de_parada)
 
@@ -103,6 +103,15 @@ def ler_perfis(args: argparse.Namespace) -> list[tuple[str, str]]:
     return perfis
 
 
+def quantidade_minima(salvas: dict[str, str]) -> int | None:
+    """O mínimo da faixa do modo quantidade, se estiver salvo e couber (1 até o máximo)."""
+    texto = str(salvas.get("quantidade_min", "")).strip()
+    if not (texto.isascii() and texto.isdecimal()):
+        return None
+    minimo, maximo = int(texto), int(salvas["quantidade"])
+    return minimo if 1 <= minimo <= maximo else None
+
+
 def montar_config(salvas: dict[str, str], args: argparse.Namespace) -> Config:
     """Junta as configurações da página com as opções da linha de comando."""
     modo = salvas["modo"]
@@ -123,6 +132,7 @@ def montar_config(salvas: dict[str, str], args: argparse.Namespace) -> Config:
     return Config(
         modo=modo,
         quantidade=args.quantidade or int(salvas["quantidade"]),
+        quantidade_min=None if args.quantidade else quantidade_minima(salvas),
         semanas=args.semanas or int(salvas["semanas"]),
         comentario=comentarios[0],
         comentarios=tuple(comentarios),
@@ -300,6 +310,7 @@ def executar_volta(p, conn, cfg: Config, perfis, perfis_nav, args: argparse.Name
         continuar = banco.ler_configuracoes(conn).get("continuar_sem_login", "sim") == "sim"
     rodada_id = None if cfg.simular else banco.iniciar_rodada(conn)
     status = "erro"
+    aviso = None
     usadas = 0
     try:
         for ordem, perfil_nav in enumerate(perfis_nav):
@@ -327,6 +338,11 @@ def executar_volta(p, conn, cfg: Config, perfis, perfis_nav, args: argparse.Name
         if not usadas:
             print("\nNenhuma conta pôde ser usada. Faça o login pela aba Contas da interface.")
         status = "concluida"
+    except ParadaPorAviso as erro:
+        status = "interrompida"
+        aviso = erro
+        print(f"\n⛔ Aviso de bloqueio — {erro}. A automação parou inteira (todas as redes e contas) e "
+              "não recomeça sozinha. Confira a conta no app antes de iniciar de novo.", flush=True)
     except JanelaFechada:
         status = "janela_fechada"
         print("\nNavegador fechado.")
@@ -338,7 +354,11 @@ def executar_volta(p, conn, cfg: Config, perfis, perfis_nav, args: argparse.Name
         if rodada_id is not None:
             banco.finalizar_rodada(conn, rodada_id, status)
         imprimir_resumo(resumo)
-    return status
+    return "aviso" if aviso else status
+
+
+class ParadaPorAviso(Exception):
+    """Uma rede mostrou um aviso de bloqueio: a automação inteira para (todas as redes e contas)."""
 
 
 class JanelaFechada(Exception):
@@ -423,6 +443,7 @@ def rodar_perfil_navegador(p, conn, rodada_id: int | None, cfg: Config, perfil_n
     paralelo = pode_rodar_em_paralelo(cfg, args)
     proximo, bloqueadas, contas, anteriores = 0, set(), None, None
     proximos = dict.fromkeys(REDES_EM_PARALELO, 0)   # no modo paralelo, cada rede tem a sua lista
+    cfg_conta = None   # cfg com a quantidade sorteada para cada conta (faixa do modo quantidade)
     while True:
         aberto_em = time.time()
         contexto = abrir_com_insistencia(p, pasta, depuracao=True) if paralelo else abrir_com_insistencia(p, pasta)
@@ -440,6 +461,9 @@ def rodar_perfil_navegador(p, conn, rodada_id: int | None, cfg: Config, perfil_n
                     print(f"As contas mudaram ({anteriores} -> {novas}); recomeçando a lista com elas.")
                     proximo, bloqueadas = 0, set()
                     proximos = dict.fromkeys(REDES_EM_PARALELO, 0)
+                if cfg_conta is None or novas != anteriores:
+                    # Uma vez por conta nesta volta: reabrir o navegador não sorteia de novo.
+                    cfg_conta = sortear_quantidades(cfg, novas)
                 contas = anteriores = novas
             if not contas:
                 return False
@@ -449,10 +473,10 @@ def rodar_perfil_navegador(p, conn, rodada_id: int | None, cfg: Config, perfil_n
                 if endereco is None:
                     print("Não consegui abrir a segunda janela; as redes vão uma depois da outra.")
             if endereco:
-                proximos = processar_em_paralelo(conn, contexto, endereco, rodada_id, cfg, alvos, proximos,
+                proximos = processar_em_paralelo(conn, contexto, endereco, rodada_id, cfg_conta, alvos, proximos,
                                                  bloqueadas, resumo, contas, reabrir=not args.sem_reabrir)
             else:
-                proximo = processar_perfis(conn, contexto, rodada_id, cfg, alvos, proximo, bloqueadas,
+                proximo = processar_perfis(conn, contexto, rodada_id, cfg_conta, alvos, proximo, bloqueadas,
                                            resumo, contas)
             return True
         except NavegadorFechado as erro:
@@ -564,6 +588,9 @@ def _rede_em_outra_janela(endereco: str, rodada_id: int | None, cfg: Config, red
     except NavegadorFechado as erro:
         resultado["proximo"] = getattr(erro, "proximo", resultado["proximo"])
         resultado["fechado"] = True
+    except ParadaPorAviso as erro:
+        resultado["aviso"] = erro
+        PARADA.set()                   # a rede principal também para, na próxima espera
     except KeyboardInterrupt:
         resultado["parado"] = True
     except PlaywrightError as erro:
@@ -619,14 +646,22 @@ def processar_em_paralelo(conn, contexto, endereco: str, rodada_id: int | None, 
         limite = time.monotonic() + 15 if fechado else None
         while trabalhador.is_alive() and (limite is None or time.monotonic() < limite):
             trabalhador.join(0.5)
+    except ParadaPorAviso:
+        PARADA.set()                   # aviso nesta rede: a outra para na próxima espera
+        trabalhador.join(15)
+        raise
     except KeyboardInterrupt:
         PARADA.set()                   # a outra rede para na próxima espera
         trabalhador.join(10)
+        if "aviso" in resultado:       # foi a outra rede que levou o aviso e pediu para parar
+            raise resultado["aviso"] from None
         raise
     finally:
         definir_rotulo(None)
         saida.descarregar()
         sys.stdout = original
+    if "aviso" in resultado:
+        raise resultado["aviso"]
     if "erro" in resultado:
         print(f"[{outra}] Erro inesperado: {resultado['erro']}. As ações do {outra} pararam nesta conta.")
     proximos[outra] = resultado.get("proximo", proximos[outra])
@@ -679,11 +714,14 @@ def processar_perfis(conn, contexto, rodada_id: int | None, cfg: Config,
             print(f"[{rede}] Parando as ações desta conta hoje: {erro}")
             bloqueadas.add(rede)
         except Bloqueio as erro:
+            # Qualquer aviso de bloqueio para TUDO, em qualquer modo (inclusive o boost):
+            # a conta fica em pausa nesta rede e a automação encerra, sem recomeçar a lista.
             print(f"[{rede}] A rede avisou: {erro}")
             if not cfg.simular:
                 print(f"[{rede}] {registrar_aviso(conn, cfg.protecao, rede, conta, str(erro))}. "
                       "Resolva qualquer verificação à mão no app ou no navegador.")
             bloqueadas.add(rede)
+            raise ParadaPorAviso(f"{rede} ({conta or 'conta'}): {erro}") from erro
         except NavegadorFechado as erro:
             erro.proximo = indice  # recomeça por este perfil-alvo
             raise
