@@ -1,0 +1,16 @@
+# Ambiente e caches
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Dados do usuário: sessões logadas e banco (nunca versionar)
+perfil_navegador/
+perfis/
+*.db
+*.db-wal
+*.db-shm
+
+# Saídas geradas
+capturas/
+traces/
+logs/

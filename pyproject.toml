@@ -1,0 +1,31 @@
+[project]
+name = "automacao-redes-sociais"
+version = "1.0.0"
+description = "Interações no Instagram e no TikTok num Google Chrome visível, com banco SQLite e interface gráfica em Tkinter."
+readme = "README.md"
+requires-python = ">=3.11"
+# Mantenha igual ao requirements.txt (usado pelos lançadores; um teste confere).
+dependencies = [
+    "playwright>=1.63",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+# Mantenha igual ao requirements-dev.txt.
+dev = ["pytest>=8"]
+
+[tool.uv]
+# É um aplicativo que roda direto da pasta (python -m automacao...), não uma
+# biblioteca: o uv instala só as dependências, não o projeto.
+package = false
+
+[tool.pytest.ini_options]
+# Só coleta testes em tests/. O norecursedirs garante que o pytest nunca entre
+# na pasta do perfil do navegador (sessões logadas), mesmo que alguém rode
+# "pytest ." a partir da raiz.
+testpaths = ["tests"]
+pythonpath = ["."]
+norecursedirs = [
+    ".*", "__pycache__", "perfil_navegador", "data", "capturas", "traces", "logs",
+    "venv", "build", "dist", "node_modules", "*.egg", "perfis",
+]
