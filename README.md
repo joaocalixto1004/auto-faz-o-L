@@ -20,7 +20,7 @@ Não é preciso instalar nada antes: na primeira vez, o próprio lançador baixa
 Python, as bibliotecas e, se o Google Chrome não estiver instalado, um navegador Chromium). Isso
 precisa de internet e pode levar alguns minutos. Nas outras vezes, a janela abre em segundos.
 
-**Windows**
+**Windows** (há um passo a passo em linguagem simples em `COMO USAR NO WINDOWS.txt`)
 
 1. Abra a pasta do projeto e dê **dois cliques em `Iniciar.bat`**.
 2. Se aparecer "O Windows protegeu o computador", clique em **Mais informações** e depois em

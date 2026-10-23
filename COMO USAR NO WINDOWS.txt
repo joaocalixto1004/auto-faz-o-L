@@ -1,0 +1,149 @@
+﻿COMO USAR A AUTOMAÇÃO DAS REDES SOCIAIS NO WINDOWS
+==================================================
+
+O programa entra nos perfis que você escolher, no Instagram e no TikTok, e em
+cada publicação ele curte, comenta, compartilha, reposta (ou favorita) e copia o
+link. Tudo com calma, no ritmo de uma pessoa. Você vê tudo acontecendo no
+Google Chrome.
+
+Não precisa saber nada de informática. É só seguir os passos abaixo.
+
+
+O QUE VOCÊ PRECISA
+------------------
+- Um computador com Windows 10 ou 11.
+- Internet.
+- Suas contas do Instagram e/ou do TikTok (usuário e senha).
+- O Google Chrome é recomendado. Se não tiver, o programa baixa um navegador
+  sozinho.
+
+
+PASSO 1 - TIRAR O PROGRAMA DO ZIP
+---------------------------------
+1. Ache o arquivo "auto-faz-o-L.zip" (normalmente na pasta Downloads).
+2. Clique nele com o botão DIREITO e escolha "Propriedades". Lá embaixo, se
+   aparecer a caixinha "Desbloquear", marque e clique em OK. Isso evita
+   avisos de segurança depois.
+3. Clique de novo com o botão DIREITO no zip e escolha "Extrair tudo...".
+4. Escolha um lugar fácil, como a pasta Documentos, e clique em "Extrair".
+
+IMPORTANTE: não abra o programa de dentro do zip. Use sempre a pasta extraída.
+
+
+PASSO 2 - ABRIR O PROGRAMA
+--------------------------
+1. Entre na pasta "auto-faz-o-L" que você extraiu.
+2. Dê DOIS CLIQUES no arquivo "Iniciar" (Iniciar.bat).
+3. Se aparecer "O Windows protegeu o computador", clique em
+   "Mais informações" e depois em "Executar assim mesmo".
+4. Uma janela preta vai aparecer.
+   - NA PRIMEIRA VEZ ela demora alguns minutos, porque está baixando o que
+     precisa. Espere, não feche.
+   - Nas outras vezes abre rapidinho.
+5. A janela do programa abre. A janela preta fica MINIMIZADA lá embaixo, na
+   barra de tarefas. NÃO FECHE ela: ela é o programa funcionando.
+
+Dica: depois de tudo certo, clique com o botão direito no "Iniciar.bat" e
+escolha "Enviar para > Área de trabalho (criar atalho)". Assim você abre pela
+Área de Trabalho.
+
+
+PASSO 3 - ENTRAR NAS SUAS CONTAS (SÓ NA PRIMEIRA VEZ)
+-----------------------------------------------------
+1. Na aba "Início", clique em "Fazer login / verificar contas".
+2. O Chrome abre com uma aba do TikTok e outra do Instagram.
+3. Entre nas suas contas normalmente, com usuário e senha (e o código por
+   SMS, se pedir).
+4. No programa, a tabela "Contas" vai mostrar "Logado" e o seu @.
+5. Clique em "Parar". Pronto: o login fica guardado e você não precisa
+   digitar a senha de novo.
+
+Tem mais de uma conta? Vá na aba "Contas", clique em "Adicionar conta...",
+dê um nome e depois clique em "Fazer login".
+
+
+PASSO 4 - DIZER QUAIS PERFIS VISITAR
+------------------------------------
+1. Vá na aba "Planilhas".
+2. Em "Perfis a acessar", cole o link de cada perfil. Exemplos:
+     https://www.instagram.com/nomedoperfil/
+     https://www.tiktok.com/@nomedoperfil
+   Pode colar vários de uma vez, um por linha.
+3. Em "Compartilhar com", escreva o @ de quem vai receber as publicações por
+   mensagem.
+4. Clique em "Salvar planilha".
+
+Se você abriu a planilha no Excel, feche o Excel antes de salvar.
+
+
+PASSO 5 - AJUSTAR AS CONFIGURAÇÕES
+----------------------------------
+Na aba "Configurações":
+- Em quais redes agir: Instagram, TikTok ou as duas. Com as duas, o
+  programa trabalha nas duas AO MESMO TEMPO, cada uma numa janela do Chrome.
+- Quantas publicações: as primeiras de cada perfil (ex.: 3) ou as das
+  últimas semanas.
+- Comentários: escreva os comentários que quiser, um de cada vez, e clique em
+  "Adicionar". Dá para pôr emojis clicando nos botõezinhos. O programa sorteia
+  um comentário diferente para cada publicação.
+- Extras: seguir os perfis, ver os stories e recomeçar a lista sozinho.
+- Limites (tetos): já vêm com valores seguros. Se não souber, deixe como está.
+- Proteção anti-bloqueio: deixa tudo mais devagar. Use em conta nova ou que já
+  levou aviso do Instagram/TikTok.
+- Modo boost: vai mais rápido, sem os limites. CUIDADO: aumenta muito o risco
+  de a rede bloquear a conta.
+
+Clique em "Salvar" no final.
+
+
+PASSO 6 - COMEÇAR
+-----------------
+1. Volte na aba "Início".
+2. Na primeira vez, marque "Simular (não clica em nada)" para testar. Ele
+   abre tudo, mas não curte nem comenta nada.
+3. Clique em "Iniciar automação".
+4. Acompanhe pelo quadro "Saída do processo". Cada linha mostra o que está
+   acontecendo, com [Instagram] ou [TikTok] na frente.
+5. Para encerrar, clique SEMPRE em "Parar".
+
+Deu tudo certo no teste? Desmarque "Simular" e clique em "Iniciar automação"
+de novo para valer.
+
+
+O QUE ELE NUNCA FAZ
+-------------------
+- Nunca tira uma curtida, um repost, um favorito ou um "seguir" que já
+  estavam feitos (nem os que você fez com a mão).
+- Nunca faz a mesma coisa duas vezes na mesma publicação.
+- Se o Instagram ou o TikTok mostrar um aviso de bloqueio, ele PARA naquela
+  rede e espera 24 horas antes de tentar de novo.
+
+
+CUIDADOS
+--------
+- Nenhum programa garante que a conta não vai ser bloqueada. Instagram e
+  TikTok não permitem automação. Use com moderação.
+- Não apague as pastas "perfil_navegador" e "perfis": é ali que ficam os seus
+  logins.
+- Deixe o computador ligado e sem entrar em suspensão enquanto o programa
+  trabalha.
+- Se fechar a janela do Chrome sem querer, não tem problema: ela abre de novo
+  sozinha em alguns segundos.
+- Não compartilhe a pasta do programa com ninguém depois de fazer login: os
+  seus logins estão nela.
+
+
+DEU PROBLEMA?
+-------------
+- O programa não abre: veja se a internet está funcionando e abra o
+  "Iniciar.bat" de novo. Os detalhes do erro ficam na pasta "logs", nos
+  arquivos "instalacao.log" e "interface.log".
+- Aparece "A janela da automação já está aberta": o programa já está aberto.
+  Procure a janela dele na barra de tarefas.
+- Não salva a planilha: feche a planilha no Excel e tente de novo.
+- Apareceu um captcha (aquele teste de "não sou robô") no TikTok: resolva com
+  a mão na janela do Chrome. O programa espera até 5 minutos.
+- A tela "Início" diz que a conta está "em pausa": a rede deu um aviso. Espere
+  o horário que aparece ali.
+- Os emojis aparecem como quadradinhos na janela do programa: é só a tela do
+  programa. No Instagram e no TikTok eles saem certinhos.

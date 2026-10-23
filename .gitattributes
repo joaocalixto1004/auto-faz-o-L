@@ -4,6 +4,9 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+# Guia para o Bloco de Notas do Windows.
+COMO*WINDOWS.txt text eol=crlf
 *.xlsx binary
 *.png binary
+*.pdf binary
 *.db binary
